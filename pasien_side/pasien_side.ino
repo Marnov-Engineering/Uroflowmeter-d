@@ -31,6 +31,10 @@
 
 #define adcBatt          39
 
+
+String cmdFromMsg //"1" flush, "2"start, "3" stop, "4" finish
+
+
 float flowRate = 0;              // Flow rate in ml/s
 float totalVolume = 0;           // Total volume in milliliters
 float density = 1.0;             // Density of the liquid 
@@ -40,7 +44,6 @@ SPISettings spiSettings(2000000, MSBFIRST, SPI_MODE0);
 SX1276 radio = new Module(csLora, dio0Lora, rstLora, misoLora, SPI_2, spiSettings);
 
 volatile bool receivedFlag = false;
-
 #if defined(ESP8266) || defined(ESP32)
   ICACHE_RAM_ATTR
 #endif
@@ -260,8 +263,6 @@ void doCalculate(){
 
         previousWeight = currentWeight;
 
-        doSend(2);
-
         // Print results
         // Serial.print("Flow Rate: ");
         // Serial.print(flowRate);
@@ -292,14 +293,14 @@ void doFlush(){
 }
 
 StaticJsonDocument<200> doc;
-//argument = 1 for replying/battert, 2 for sending sensor datas
-void doSend(int cmd){
+//argument = 1 for replying/battery, 2 for sending sensor datas
+void doSend(int which){
   //send ml/s and V in one packet
-  if (cmd = 1){
+  if (which = 1){
     doc["battery"] = readBattery();
   }
 
-  else if (cmd = 2) {
+  else if (which = 2) {
     doc["flowrate"] = flowRate;
     doc["volume"] = totalVolume;
     doc["battery"] = readBattery();
@@ -339,35 +340,10 @@ void doMotor(int dir, int pwm){
   }
   analogWrite(pwmA, pwm);
 }
-bool receiveFlag;
+
 
 void onReceive(){
-  
-}
-
-float readBattery(){
-  return movingAverageBatt.addValue(analogRead(adcBatt));
-}
-
-int receivedCMd;
-
-void loop(){
-  unsigned long currentMillis = millis(); // for doCalculate procedure
-  doCalculate();
-  readBattery()
-  FlushButton.update();
-  if (FlushButton.isFlagChanged()) {
-    receivedFlag = false;
-    Serial.print("Flag toggled to: ");
-    Serial.println(FlushButton.getFlag() ? "ON" : "OFF");
-    doFlush(); 
-  }
-  
-  if(receiveFlag){
-
-    receivedFlag = false;
-
-    String str;
+  String str;
     int state = radio.readData(str);
     deserializeJson(doc, str);
     //what do we wanna do to the cmd, assign cmd var with received cmd
@@ -404,11 +380,41 @@ void loop(){
       Serial.println(state);
 
     }
+
+    //
+    cmdFromMsg = doc["cmd"];
     state = radio.startReceive();
+}
+
+float readBattery(){
+  return movingAverageBatt.addValue(analogRead(adcBatt));
+}
+
+cmdFromMsg;
+
+void loop(){
+  unsigned long currentMillis = millis(); // for doCalculate procedure
+  readBattery()
+  FlushButton.update();
+
+  if(receiveFlag){
+    receivedFlag = false;
+    onReceive();
   }
     
+
+  if(cmdFromMsg == "2"){
+    doCalculate();
+    send(2);
+  }
   
 
 
+  if (FlushButton.isFlagChanged() || cmdFromMsg = "1") {
+    receivedFlag = false;
+    Serial.print("Flag toggled to: ");
+    Serial.println(FlushButton.getFlag() ? "ON" : "OFF");
+    doFlush(); 
+  }
 
 }
