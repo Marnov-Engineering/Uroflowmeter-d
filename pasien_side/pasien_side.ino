@@ -1,6 +1,11 @@
+#include <ArduinoJson.h>
+#include <ArduinoJson.hpp>
+
 #include "HX711.h"
 #include "soc/rtc.h"
 #include "RadioLib.h"
+
+#include "driver/rtc_io.h"
 
 #define in1              19
 #define in2              18
@@ -31,9 +36,14 @@
 
 #define adcBatt          39
 
+#define WAKEUP_GPIO_27 GPIO_NUM_27     // Only RTC IO are allowed
+#define WAKEUP_GPIO_12 GPIO_NUM_12     // Only RTC IO are allowed
+uint64_t bitmask = BUTTON_PIN_BITMASK(WAKEUP_GPIO_27) | BUTTON_PIN_BITMASK(WAKEUP_GPIO_12);
+RTC_DATA_ATTR int bootCount = 0;
 
-String cmdFromMsg //"1" flush, "2"start, "3" stop, "4" finish
+String cmdFromMsg;
 
+int bat;
 
 float flowRate = 0;              // Flow rate in ml/s
 float totalVolume = 0;           // Total volume in milliliters
@@ -126,7 +136,6 @@ class MovingAverage {
       windowSize = newWindowSizeManipulate;
     }
 };
-MovingAverage movingAverageBatt(10);
 
 class DebounceButton {
   private:
@@ -196,11 +205,32 @@ class DebounceButton {
           return false;
       }
 };
+
+MovingAverage movingAverageBatt(10);
 DebounceButton FlushButton(flushButton);
+DebounceButton LimitSwitch1(limitSwitch1);
+DebounceButton LimitSwitch2(limitSwitch2);
 HX711 scale;
+StaticJsonDocument<200> doc;
 
 void setup() {
   Serial.begin(115200);
+
+  esp_sleep_enable_ext1_wakeup_io(bitmask, ESP_EXT1_WAKEUP_ANY_HIGH);
+  rtc_gpio_pulldown_en(WAKEUP_GPIO_2);
+  rtc_gpio_pullup_dis(WAKEUP_GPIO_2);
+  rtc_gpio_pulldown_en(WAKEUP_GPIO_15);
+  rtc_gpio_pullup_dis(WAKEUP_GPIO_15);
+
+  xTaskCreatePinnedToCore(
+    updateButton,   /* Task function. */
+    "updateButton", /* name of task. */
+    30000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    1,           /* priority of the task */
+    &Task1,      /* Task handle to keep track of created task */
+    0);          /* pin task to core 0 */
+
   FlushButton.begin();
 
   pinMode(in1, OUTPUT);
@@ -271,6 +301,7 @@ void doCalculate(){
         // Serial.println(" ml");
     }
 }
+
 //BLOCKING PROCEDURE
 void doFlush(){
   
@@ -292,27 +323,54 @@ void doFlush(){
 
 }
 
-StaticJsonDocument<200> doc;
-//argument = 1 for replying/battery, 2 for sending sensor datas
-void doSend(int which){
+
+
+// bool parseMessage(String message, float &flowRate, float &totalVolume, int &battery, String &reply) {
+//   int firstComma = message.indexOf(',');
+//   int secondComma = message.indexOf(',', firstComma + 1);
+//   int thirdComma = message.indexOf(',', firstComma + 2);
+
+//   // Ensure all commas are found
+//   if (firstComma == -1 || secondComma == -1 || thirdComma == -1) {
+//     return false;
+//   }
+
+//   // Extract substrings and convert to respective types
+//   temperature = message.substring(0, firstComma).toFloat();
+//   humidity = message.substring(firstComma + 1, secondComma).toFloat();
+//   lightLevel = message.substring(secondComma + 1).toInt();
+
+//   return true; // Parsing successful
+// }
+
+
+void doSend(String which){
   //send ml/s and V in one packet
-  if (which = 1){
-    doc["battery"] = readBattery();
+  String msg; //flowrate,volume,battery,reply
+
+  if (which = "wakeReply"){
+    msg = String(0)+ "," + String(0) + "," + String(readBattery()) + ","+ "woke!";
   }
 
-  else if (which = 2) {
-    doc["flowrate"] = flowRate;
-    doc["volume"] = totalVolume;
-    doc["battery"] = readBattery();
+  else if (which = "data") {
+    msg = String(flowRate) + "," + String(totalVolume) + "," + String(readBattery()) + ","+ String(0);
+  }
+
+  else if (which = "flushReply") {
+    msg = String(0)+"," + String(0) + "," + String(0) + ","+ "flushed!";
+  }
+  else if (which = "stopReply") {
+    msg = String(0)+"," + String(0) + "," + String(0) + ","+ "stopped!";
+  }
+  else if (which = "sleepReply") {
+    msg = String(0)+"," + String(0) + "," + String(0) + ","+ "slept!";
   }
   
-  String jsonMsg;
-  serializeJson(doc, jsonMsg);
 
 
-  int state = radio.transmit(jsonMsg);
+  int state = radio.transmit(msg);
   if (state == RADIOLIB_ERR_NONE) {
-    Serial.println(jsonMsg + " sent");
+    Serial.println(msg + " <<sent");
   } else if (state == RADIOLIB_ERR_PACKET_TOO_LONG) {
     Serial.println(F("[SX1278] Packet too long!"));
   } else if (state == RADIOLIB_ERR_TX_TIMEOUT) {
@@ -342,10 +400,10 @@ void doMotor(int dir, int pwm){
 }
 
 
-void onReceive(){
-  String str;
+void receivedMsg(){
+    String str;
     int state = radio.readData(str);
-    deserializeJson(doc, str);
+    parseMessage(str, float &temperature, float &humidity, int &lightLevel)
     //what do we wanna do to the cmd, assign cmd var with received cmd
     if (state == RADIOLIB_ERR_NONE) {
       // packet was successfully received
@@ -387,34 +445,61 @@ void onReceive(){
 }
 
 float readBattery(){
+  //battery
   return movingAverageBatt.addValue(analogRead(adcBatt));
 }
 
-cmdFromMsg;
-
 void loop(){
   unsigned long currentMillis = millis(); // for doCalculate procedure
-  readBattery()
-  FlushButton.update();
-
   if(receiveFlag){
     receivedFlag = false;
-    onReceive();
+    receivedMsg();
   }
     
 
-  if(cmdFromMsg == "2"){
+  if(cmdFromMsg == "nothing"){
+    // do nothing
+  }
+
+  else if(cmdFromMsg == "measure"){
     doCalculate();
-    send(2);
+    doSend("data"); //sensor datas
   }
-  
 
+  else if (cmdFromMsg == "wake") {
+    doSend("wakeReply"); //battery
+    cmdFromMsg = "nothing";
 
-  if (FlushButton.isFlagChanged() || cmdFromMsg = "1") {
+  }
+  else if(cmdFromMsg == "stop"){
+    doSend("stopReply"); //sensor datas
+    cmdFromMsg = "nothing";
+  }
+
+  else if (FlushButton.isFlagChanged() || cmdFromMsg = "flush") {
     receivedFlag = false;
-    Serial.print("Flag toggled to: ");
-    Serial.println(FlushButton.getFlag() ? "ON" : "OFF");
-    doFlush(); 
+    // Serial.print("Flag toggled to: ");
+    // Serial.println(FlushButton.getFlag() ? "ON" : "OFF");
+    doFlush();
+    doSend("flush reply");
+    cmdFromMsg = "nothing";
   }
 
+  else if (cmdFromMsg == "sleep"){
+    //loadcell sleep
+    cmdFromMsg = "nothing";
+    esp_deep_sleep_start();
+  }
+
+}
+
+void UpdateButton(void* pvParameters) {
+
+  for (;;) {
+    readBattery();
+    FlushButton.update();
+    LimitSwitch1.update();
+    LimitSwitch2.update();
+
+  }
 }
