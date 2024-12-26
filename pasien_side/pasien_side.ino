@@ -11,7 +11,7 @@
 #define in2              18
 #define in3              5
 #define pwmA             23
-#define motorTrig        22
+#define motorTrig        17
 
 #define relayValve       21
 
@@ -39,10 +39,12 @@
 #define BUTTON_PIN_BITMASK(GPIO) (1ULL << GPIO)
 #define WAKEUP_GPIO_27 GPIO_NUM_27     // Only RTC IO are allowed
 #define WAKEUP_GPIO_12 GPIO_NUM_12     // Only RTC IO are allowed
-uint64_t bitmask = BUTTON_PIN_BITMASK(WAKEUP_GPIO_27) | BUTTON_PIN_BITMASK(WAKEUP_GPIO_12);
+uint64_t bitmask = BUTTON_PIN_BITMASK(WAKEUP_GPIO_27);
+// | BUTTON_PIN_BITMASK(WAKEUP_GPIO_12);
 RTC_DATA_ATTR int bootCount = 0;
 
-String cmdFromMsg;
+String cmdFromMsg = "nothing";
+String reply;
 
 int bat;
 
@@ -245,40 +247,230 @@ DebounceButton FlushButton(flushButton);
 DebounceButton LimitSwitch1(limitSwitch1);
 DebounceButton LimitSwitch2(limitSwitch2);
 HX711 scale;
-StaticJsonDocument<200> doc;
-TaskHandle_t Task1;
+TaskHandle_t DoCmd;
+TaskHandle_t DoReceive;
+TaskHandle_t DoCalculate;
+TaskHandle_t DoFlush;
 
-float readBattery(){
-  //battery
-  return movingAverageBatt.addValue(analogRead(adcBatt));
+float currentWeight;
+float previousWeight;
+
+bool doCalculateFlag = false;
+bool doFlushFlag = false;
+
+int readBattery(){
+  //battery need the adc value
+  int batt = movingAverageBatt.addValue(analogRead(adcBatt));
+  // Serial.print("batt: ");
+  // Serial.println(batt);
+  return batt;
 }
 
-
-void updateButton(void* pvParameters) {
+//core1
+void doReceive(void* pvParameters) {
+  TickType_t xLastWakeTime;
+  const TickType_t xFrequency = 30/ portTICK_PERIOD_MS;
+  xLastWakeTime = xTaskGetTickCount ();
 
   for (;;) {
-    if(receivedFlag){
+    if(receivedFlag) {
       receivedFlag = false;
       receivedMsg();
     }
-    readBattery();
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+  }
+}
+
+//core0
+void doCmd(void* pvParameters){
+
+  TickType_t xLastWakeTime;
+  const TickType_t xFrequency = 10/ portTICK_PERIOD_MS;
+  xLastWakeTime = xTaskGetTickCount ();
+
+  for(;;) {
+    
     FlushButton.update();
     LimitSwitch1.update();
     LimitSwitch2.update();
 
-    vTaskDelay(pdMS_TO_TICKS(10));
+    if(cmdFromMsg == "nothing"){
+      // do nothing
+      // Serial.println("masuk-nothing");
+    }
 
+    else if (cmdFromMsg == "wake") {
+      Serial.println("masuk wake");
+      doSend("wakeReply"); //battery
+      cmdFromMsg = "nothing";
+    } 
+
+    else if(cmdFromMsg == "measure"){
+      scale.power_up();
+      Serial.println("masuk measure");
+      doCalculateFlag = true;
+      cmdFromMsg = "nothing";
+    }
+
+
+    else if(cmdFromMsg == "stop"){
+      Serial.println("masuk stop");
+      scale.power_down();
+      doCalculateFlag = false;
+      doSend("stopReply"); //sensor datas
+      cmdFromMsg = "nothing";
+    }
+
+    else if (cmdFromMsg == "flush") {
+ 
+      doFlushFlag = true;
+      cmdFromMsg = "nothing";
+    }
+
+    else if (cmdFromMsg == "sleep"){
+      Serial.println("masuk sleep");
+      cmdFromMsg = "nothing";
+      int state = radio.startReceive();
+      doSend("sleepReply");
+      delay(1000);
+      esp_deep_sleep_start();
+    }
+
+    if (FlushButton.isFlagChanged()){
+      Serial.println("masuk flush");
+      doFlushFlag = true;
+      cmdFromMsg = "nothing";
+    }
+
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+  }
+}
+
+
+void doCalculate(void* pvParameters){
+
+  
+  TickType_t xLastWakeTime;
+  const TickType_t xFrequency = 1000/ portTICK_PERIOD_MS;
+  xLastWakeTime = xTaskGetTickCount ();
+
+  for (;;){
+    if(doCalculateFlag){
+      
+      currentWeight = scale.get_units(10);
+      float weightChange = currentWeight - previousWeight;
+      flowRate = weightChange * density;
+      if (flowRate > 0) {
+          totalVolume += flowRate;
+      }
+      previousWeight = currentWeight;
+      Serial.print(flowRate);
+      Serial.print(", ");
+      Serial.println(totalVolume);
+      
+      doSend("data"); //sensor datas 
+    }
+    else {
+      scale.power_down();
+    }
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+  }
+}
+
+int state = 0; // State variable for non-blocking execution
+void doFlush(void* pvParameters){
+  TickType_t xLastWakeTime;
+  const TickType_t xFrequency = 100/ portTICK_PERIOD_MS;
+  xLastWakeTime = xTaskGetTickCount ();
+  for(;;){
+    if(doFlushFlag){
+      switch (state) {
+          case 0:
+              // Forward to toss
+              if (!LimitSwitch1.isFlagChanged()) {
+                  doMotor(1, 255);
+
+                  Serial.println("motor is turning");
+              } else {
+                  doMotor(0, 0); // Stop motor
+                  state = 1;     // Move to next state
+              }
+              break;
+
+          case 1:
+              Serial.println("motor stop and delaying");
+              if (nonBlockingDelay(3000)) {
+                  state = 2; // Move to reverse
+              }
+
+              break;
+
+          case 2:
+              // Reverse
+              if (!LimitSwitch2.isFlagChanged()) {
+                  Serial.println("motor is reversing");
+                  doMotor(-1, 255);
+
+              } else {
+                  doMotor(0, 0); // Stop motor
+                  state = 3;     // Move to next state
+              }
+              break;
+
+          case 3:
+              Serial.println("motor stop and delaying and relay on");
+              digitalWrite(relayValve, HIGH);
+              if (nonBlockingDelay(3000)) {
+                digitalWrite(relayValve, LOW);
+                  Serial.println("relay off");
+                  state = 4;
+              }
+
+              break;
+
+          case 4:
+              if (!LimitSwitch1.isFlagChanged()) {
+                  doMotor(1, 255);
+                  Serial.println("motor is turning again");
+              } else {
+                  doMotor(0, 0); // Stop motor
+                  state = 5;     // Move to next state
+              }
+              break;
+
+          case 5:
+              // Non-blocking delay after reverse motion
+              Serial.println("motor stop and delaying");
+              if (nonBlockingDelay(3000)) {
+                  state = 6; // Activate relay
+              }
+
+              break;
+
+          case 6:
+              // Reverse to complete cycle
+              if (!LimitSwitch2.isFlagChanged()) {
+                  doMotor(-1, 255);
+                  Serial.println("motor is reversing again FINAL!");
+              } else {
+                  doMotor(0, 0); // Stop motor
+                  Serial.println("done");
+                  state = 0;     // Reset state to start over
+                  doFlushFlag = false;
+                  doSend("flushReply");
+              }
+              break;
+      }
+    }
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
 }
 
 void setup() {
   Serial.begin(115200);
-
   ++bootCount;
   Serial.println("Boot number: " + String(bootCount));
-
   print_wakeup_reason();
-
   esp_sleep_enable_ext1_wakeup(bitmask, ESP_EXT1_WAKEUP_ANY_HIGH);
   rtc_gpio_pulldown_en(WAKEUP_GPIO_27);
   rtc_gpio_pullup_dis(WAKEUP_GPIO_27);
@@ -286,13 +478,42 @@ void setup() {
   rtc_gpio_pullup_dis(WAKEUP_GPIO_12);
  
   xTaskCreatePinnedToCore(
-    updateButton,   /* Task function. */
-    "updateButton", /* name of task. */
-    3000,       /* Stack size of task */
+    doCmd,   /* Task function. */
+    "doCmd", /* name of task. */
+    5000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    3,           /* priority of the task */
+    &DoCmd,      /* Task handle to keep track of created task */
+    0);          /* pin task to core 0 */
+
+  xTaskCreatePinnedToCore(
+    doFlush,   /* Task function. */
+    "doFlush", /* name of task. */
+    5000,       /* Stack size of task */
     NULL,        /* parameter of the task */
     2,           /* priority of the task */
-    &Task1,      /* Task handle to keep track of created task */
+    &DoFlush,      /* Task handle to keep track of created task */
     0);          /* pin task to core 0 */
+  
+  xTaskCreatePinnedToCore(
+    doCalculate,   /* Task function. */
+    "doCalculate", /* name of task. */
+    5000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    2,           /* priority of the task */
+    &DoCalculate,      /* Task handle to keep track of created task */
+    0);          /* pin task to core 0 */
+
+  xTaskCreatePinnedToCore(
+    doReceive,   /* Task function. */
+    "doReceive", /* name of task. */
+    5000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    3,           /* priority of the task */
+    &DoReceive,      /* Task handle to keep track of created task */
+    1);          /* pin task to core 1 */
+
+  
 
   FlushButton.begin();
   LimitSwitch1.begin();
@@ -304,8 +525,6 @@ void setup() {
   pinMode(pwmA, OUTPUT);
   pinMode(motorTrig, OUTPUT);
   pinMode(relayValve, OUTPUT);
-  // pinMode(limitSwitch1, INPUT);
-  // pinMode(limitSwitch2, INPUT);
   // pinMode(ledMerah, OUTPUT);
   pinMode(ledHijau, OUTPUT);
   // pinMode(ledIndicator, OUTPUT);
@@ -319,78 +538,31 @@ void setup() {
   scale.set_scale(965.472);
   scale.tare();
 
-  // SPI_2.begin(sclkLora, misoLora, mosiLora, csLora);
+  SPI_2.begin(sclkLora, misoLora, mosiLora, csLora);
   
-  // int state = radio.beginFSK(915.0, 4.8, 5.0, 125.0, 10, 16, true);
-  // if (state == RADIOLIB_ERR_NONE) {
-  //   Serial.println(F("success!"));
-  // } else {
-  //   Serial.print(F ("failed, code "));
-  //   Serial.println(state);
-  //   while (true) { delay(10); }
-  // }
-  // state = radio.setSpreadingFactor(7);
+  int state = radio.beginFSK(915.0, 4.8, 5.0, 125.0, 10, 16, true);
+  if (state == RADIOLIB_ERR_NONE) {
+    Serial.println(F("success!"));
+  } else {
+    Serial.print(F ("failed, code "));
+    Serial.println(state);
+    while (true) { delay(10); }
+  }
+  state = radio.setSpreadingFactor(7);
 
-  // radio.setPacketReceivedAction(setFlag);
-  // state = radio.startReceive();
+  radio.setPacketReceivedAction(setFlag);
+  state = radio.startReceive();
+  // delay(1000);
+
+  // esp_deep_sleep_start();
+  // Serial.println("go sleep......");
 
 }
 
 
 
 //calculate ml/s and V
-unsigned long previousMillis = 0;
-unsigned long currentMillis = 0;
-const unsigned long intervalCalculate = 1000;
-unsigned long currentWeight;
-unsigned long previousWeight; 
 
-void doCalculate(){
-  if(nonBlockingDelay(1000)){
-      currentWeight = scale.get_units(10);
-
-
-      float weightChange = currentWeight - previousWeight;
-      flowRate = weightChange * density;
-
-      if (flowRate > 0) {
-          totalVolume += flowRate;
-      }
-
-      previousWeight = currentWeight;
-      Serial.print(flowRate);
-      Serial.print(", ");
-      Serial.println(totalVolume);
-      
-
-  }
-
-  // if (currentMillis - previousMillis >= intervalCalculate) {
-  //       previousMillis = currentMillis;
-
-
-  //       currentWeight = scale.get_units(10);
-
-
-  //       float weightChange = currentWeight - previousWeight;
-  //       flowRate = weightChange * density;
-
-  //       if (flowRate > 0) {
-  //           totalVolume += flowRate;
-  //       }
-
-  //       previousWeight = currentWeight;
-
-  //       // Print results
-  //       // Serial.print("Flow Rate: ");
-  //       // Serial.print(flowRate);
-  //       // Serial.print(" ml/s, Total Volume: ");
-  //       // Serial.print(totalVolume);
-  //       // Serial.println(" ml");
-  //   }
-}
-
-//BLOCKING PROCEDURE
 
 bool nonBlockingDelay(unsigned long duration) {
     static unsigned long startMillis = 0;
@@ -409,127 +581,27 @@ bool nonBlockingDelay(unsigned long duration) {
     return false; // Delay ongoing
 }
 int delayInterval = 3000;
-void doFlush(){
-  static int state = 0; // State variable for non-blocking execution
-
-  switch (state) {
-      case 0:
-          // Forward to toss
-          if (!LimitSwitch1.isFlagChanged()) {
-              doMotor(1, 50);
-
-              Serial.println("motor is turning");
-          } else {
-              doMotor(0, 0); // Stop motor
-              state = 1;     // Move to next state
-          }
-          break;
-
-      case 1:
-          Serial.println("motor stop and delaying");
-          if (nonBlockingDelay(delayInterval)) {
-              state = 2; // Move to reverse
-          }
-
-          break;
-
-      case 2:
-          // Reverse
-          if (!LimitSwitch2.isFlagChanged()) {
-              Serial.println("motor is reversing");
-
-          } else {
-              doMotor(0, 0); // Stop motor
-              state = 3;     // Move to next state
-          }
-          break;
-
-      case 3:
-          Serial.println("motor stop and delaying and relay on");
-          digitalWrite(relayValve, HIGH);
-          if (nonBlockingDelay(delayInterval)) {
-            digitalWrite(relayValve, LOW);
-              Serial.println("relay off");
-              state = 4;
-          }
-
-          break;
-
-      case 4:
-          if (!LimitSwitch1.isFlagChanged()) {
-              doMotor(1, 50);
-              Serial.println("motor is turning again");
-          } else {
-              doMotor(0, 0); // Stop motor
-              state = 5;     // Move to next state
-          }
-          break;
-
-      case 5:
-          // Non-blocking delay after reverse motion
-          Serial.println("motor stop and delaying");
-          if (nonBlockingDelay(delayInterval)) {
-              state = 6; // Activate relay
-          }
-
-          break;
-
-      case 6:
-          // Reverse to complete cycle
-          if (!LimitSwitch2.isFlagChanged()) {
-              doMotor(-1, 50);
-              Serial.println("motor is reversing");
-          } else {
-              doMotor(0, 0); // Stop motor
-              Serial.println("done");
-              state = 0;     // Reset state to start over
-          }
-          break;
-  }
 
 
-}
-
-
-
-// bool parseMessage(String message, float &flowRate, float &totalVolume, int &battery, String &reply) {
-//   int firstComma = message.indexOf(',');
-//   int secondComma = message.indexOf(',', firstComma + 1);
-//   int thirdComma = message.indexOf(',', secondComma + 1);
-
-//   // Ensure all commas are found
-//   if (firstComma == -1 || secondComma == -1 || thirdComma == -1) {
-//     return false;
-//   }
-
-//   // Extract substrings and convert to respective types
-//   flowRate = message.substring(0, firstComma).toFloat();
-//   totalVolume = message.substring(firstComma + 1, secondComma).toFloat();
-//   battery = message.substring(secondComma + 1, thirdComma).toInt();
-//   reply = message.substring(thirdComma + 1);
-
-//   return true; // Parsing successful
-// }
 
 void doSend(String which){
-  //send ml/s and V in one packet
-  String msg; //flowrate,volume,battery,reply
+  String msg; //flowrate,volume,battery,reply in one packet
 
-  if (which = "wakeReply"){
-    msg = String(0)+ "," + String(0) + "," + String(readBattery()) + ","+ "woke!";
+  if (which == "wakeReply"){
+    msg = String(0)+ "," + String(0) + "," + String(readBattery()) + ","+ "woke!"; 
   }
 
-  else if (which = "data") {
+  else if (which == "data") {
     msg = String(flowRate) + "," + String(totalVolume) + "," + String(readBattery()) + ","+ String(0);
   }
 
-  else if (which = "flushReply") {
+  else if (which == "flushReply") {
     msg = String(0)+"," + String(0) + "," + String(0) + ","+ "flushed!";
   }
-  else if (which = "stopReply") {
+  else if (which == "stopReply") {
     msg = String(0)+"," + String(0) + "," + String(0) + ","+ "stopped!";
   }
-  else if (which = "sleepReply") {
+  else if (which == "sleepReply") {
     msg = String(0)+"," + String(0) + "," + String(0) + ","+ "slept!";
   }
   
@@ -551,49 +623,54 @@ void doSend(String which){
 }
 
 void doMotor(int dir, int pwm){
+  
   if(dir == 1) {
+
+    digitalWrite(motorTrig, HIGH);
     digitalWrite(in1, HIGH);
     digitalWrite(in2, LOW);
   }
   else if (dir == -1){
-    digitalWrite(in1, HIGH);
-    digitalWrite(in2, LOW);
+    digitalWrite(motorTrig, HIGH);
+    digitalWrite(in1, LOW);
+    digitalWrite(in2, HIGH);
   }
   else {
     digitalWrite(in1, LOW);
     digitalWrite(in2, LOW);
+    digitalWrite(motorTrig, LOW);
   }
   analogWrite(pwmA, pwm);
 }
 
-
 void receivedMsg(){
     String str;
     int state = radio.readData(str);
-    // parseMessage(str, float &temperature, float &humidity, int &lightLevel)
-    //what do we wanna do to the cmd, assign cmd var with received cmd
+    parseMessage(str, cmdFromMsg, reply);
     if (state == RADIOLIB_ERR_NONE) {
       // packet was successfully received
-      Serial.println(F("[SX1278] Received packet!"));
+      // Serial.println(F("[SX1278] Received packet!"));
 
       // print data of the packet
-      Serial.print(F("[SX1278] Data:\t\t"));
-      Serial.println(str);
+      // Serial.print(F("[SX1278] Data:\t\t"));
+      Serial.print(cmdFromMsg);
+      Serial.print(" ");
+      Serial.println(reply);
 
-      // print RSSI (Received Signal Strength Indicator)
-      Serial.print(F("[SX1278] RSSI:\t\t"));
-      Serial.print(radio.getRSSI());
-      Serial.println(F(" dBm"));
+      // // print RSSI (Received Signal Strength Indicator)
+      // Serial.print(F("[SX1278] RSSI:\t\t"));
+      // Serial.print(radio.getRSSI());
+      // Serial.println(F(" dBm"));
 
-      // print SNR (Signal-to-Noise Ratio)
-      Serial.print(F("[SX1278] SNR:\t\t"));
-      Serial.print(radio.getSNR());
-      Serial.println(F(" dB"));
+      // // print SNR (Signal-to-Noise Ratio)
+      // Serial.print(F("[SX1278] SNR:\t\t"));
+      // Serial.print(radio.getSNR());
+      // Serial.println(F(" dB"));
 
-      // print frequency error
-      Serial.print(F("[SX1278] Frequency error:\t"));
-      Serial.print(radio.getFrequencyError());
-      Serial.println(F(" Hz"));
+      // // print frequency error
+      // Serial.print(F("[SX1278] Frequency error:\t"));
+      // Serial.print(radio.getFrequencyError());
+      // Serial.println(F(" Hz"));
 
     } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
       // packet was received, but is malformed
@@ -606,9 +683,23 @@ void receivedMsg(){
 
     }
 
-    //
-    // cmdFromMsg = doc["cmd"];
+    
+
     state = radio.startReceive();
+}
+
+bool parseMessage(String message, String &cmdFromMsg, String &reply) {
+  int firstComma = message.indexOf(',');
+
+  // Ensure all commas are found
+  if (firstComma == -1) {
+    return false;
+  }
+
+  cmdFromMsg = message.substring(0, firstComma);
+  reply = message.substring(firstComma + 1);
+
+  return true; // Parsing successful
 }
 
 
@@ -619,42 +710,6 @@ void receivedMsg(){
 // doFlush
 
 void loop(){
-
-
-    
-
-  if(cmdFromMsg == "nothing"){
-    // do nothing
-  }
-
-  else if(cmdFromMsg == "measure"){
-    doCalculate();
-    doSend("data"); //sensor datas
-  }
-
-  else if (cmdFromMsg == "wake") {
-    doSend("wakeReply"); //battery
-    cmdFromMsg = "nothing";
-
-  }
-  else if(cmdFromMsg == "stop"){
-    doSend("stopReply"); //sensor datas
-    cmdFromMsg = "nothing";
-  }
-
-  else if (FlushButton.isFlagChanged() || cmdFromMsg == "flush") {
-    // Serial.print("Flag toggled to: ");
-    // Serial.println(FlushButton.getFlag() ? "ON" : "OFF");
-    doFlush();
-    doSend("flush reply");
-    cmdFromMsg = "nothing";
-  }
-
-  else if (cmdFromMsg == "sleep"){
-    //loadcell sleep
-    cmdFromMsg = "nothing";
-    esp_deep_sleep_start();
-  }
 
 }
 
