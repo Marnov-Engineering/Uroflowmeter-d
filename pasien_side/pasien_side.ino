@@ -54,9 +54,9 @@ float density = 1.0;             // Density of the liquid
 
 SPIClass SPI_2(VSPI);
 SPISettings spiSettings(2000000, MSBFIRST, SPI_MODE0);
-SX1276 radio = new Module(csLora, dio0Lora, rstLora, misoLora, SPI_2, spiSettings);
+SX1276 radio = new Module(csLora, dio0Lora, -1, misoLora, SPI_2, spiSettings);
 
-volatile bool receivedFlag = false;
+volatile bool receivedFla g = false;
 #if defined(ESP8266) || defined(ESP32)
   ICACHE_RAM_ATTR
 #endif
@@ -322,7 +322,7 @@ void doCmd(void* pvParameters){
     }
 
     else if (cmdFromMsg == "flush") {
- 
+      Serial.println("masuk flush");
       doFlushFlag = true;
       cmdFromMsg = "nothing";
     }
@@ -331,6 +331,13 @@ void doCmd(void* pvParameters){
       Serial.println("masuk sleep");
       cmdFromMsg = "nothing";
       int state = radio.startReceive();
+      if (state == RADIOLIB_ERR_NONE) {
+        Serial.println(F("success receive mode!"));
+      } else {
+        Serial.print(F("failed, code "));
+        Serial.println(state);
+        while (true) { delay(10); }
+      }
       doSend("sleepReply");
       delay(1000);
       esp_deep_sleep_start();
@@ -373,7 +380,7 @@ void doCalculate(void* pvParameters){
     else {
       scale.power_down();
     }
-    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+  vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
 }
 
@@ -498,7 +505,7 @@ void setup() {
   xTaskCreatePinnedToCore(
     doCalculate,   /* Task function. */
     "doCalculate", /* name of task. */
-    5000,       /* Stack size of task */
+    10000,       /* Stack size of task */
     NULL,        /* parameter of the task */
     2,           /* priority of the task */
     &DoCalculate,      /* Task handle to keep track of created task */
