@@ -91,6 +91,26 @@ int count;
 String inputString = "";  // Variable to store the input string
 bool toTransmit = false;  // Flag to indicate when the string is complete
 
+bool nonBlockingDelay(unsigned long duration) {
+    static unsigned long startMillis = 0;
+    static bool inDelay = false;
+
+    if (!inDelay) {
+        startMillis = millis(); // Capture the start time
+        inDelay = true;         // Start the delay
+    }
+
+    if (millis() - startMillis >= duration) {
+        inDelay = false; // Delay finished
+        return true;     // Indicate the delay has ended
+    }
+
+    return false; // Delay ongoing
+}
+
+bool continueSendFlag = false;
+String msg;
+
 void loop() {
 
   while (Serial.available()) {
@@ -105,9 +125,9 @@ void loop() {
   if(toTransmit){
 
     Serial.println("sending");
-    String msg = inputString;
-    
+    msg = inputString;
     int state = radio.transmit(msg);
+    
 
     // byte byteArr[] = {0x01, 0x23, 0x45, 0x67,
     //                   0x89, 0xAB, 0xCD, 0xEF};
@@ -125,10 +145,30 @@ void loop() {
     }
 
     toTransmit = false;
+    continueSendFlag = true;
     inputString = "";
     state = radio.startReceive();
-  }
 
+  }
+  if(nonBlockingDelay(500) && continueSendFlag){
+      int state = radio.transmit(msg);
+    
+
+    // byte byteArr[] = {0x01, 0x23, 0x45, 0x67,
+    //                   0x89, 0xAB, 0xCD, 0xEF};
+    // int state = radio.transmit(byteArr, 8);
+
+    if (state == RADIOLIB_ERR_NONE) {
+      Serial.println(msg + " sent again");
+    } else if (state == RADIOLIB_ERR_PACKET_TOO_LONG) {
+      Serial.println(F("[SX1278] Packet too long!"));
+    } else if (state == RADIOLIB_ERR_TX_TIMEOUT) {
+      Serial.println(F("[SX1278] Timed out while transmitting!"));
+    } else {
+      Serial.println(F("[SX1278] Failed to transmit packet, code "));
+      Serial.println(state);
+    }
+  }
   // Serial.println(radio.getIRQFlags(), BIN);
 
  if(receivedFlag) {
@@ -159,9 +199,10 @@ void loop() {
       Serial.println(battery);
       Serial.print(" reply: ");
       Serial.println(reply);
+      
       if(reply == "woke!" || reply == "flushed!" || reply == "stopped!" || reply == "slept!"){
-      //   toTransmit = false;
-      //   inputString = "";
+        continueSendFlag = false;
+        // inputString = "";
         // Serial.println("masuk reply =");
       }
 
