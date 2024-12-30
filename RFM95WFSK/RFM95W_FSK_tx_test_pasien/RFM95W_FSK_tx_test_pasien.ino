@@ -147,9 +147,13 @@ void loop() {
     toTransmit = false;
     continueSendFlag = true;
     inputString = "";
+    reply = "";
+    battery = 0;
     state = radio.startReceive();
 
   }
+
+  //if haven't receive reply yet
   if(nonBlockingDelay(500) && continueSendFlag){
       int state = radio.transmit(msg);
     
