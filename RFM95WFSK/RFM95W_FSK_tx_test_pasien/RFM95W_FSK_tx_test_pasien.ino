@@ -204,7 +204,7 @@ void loop() {
       Serial.print(" reply: ");
       Serial.println(reply);
       
-      if(reply == "woke!" || reply == "flushed!" || reply == "stopped!" || reply == "slept!"){
+      if(reply == "woke!" || reply == "flushing!" || reply == "measuring!" || reply == "stopped!" || reply == "slept!"){
         continueSendFlag = false;
         // inputString = "";
         // Serial.println("masuk reply =");
