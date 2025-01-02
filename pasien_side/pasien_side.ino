@@ -1,11 +1,8 @@
-#include <ArduinoJson.h>
-#include <ArduinoJson.hpp>
-
 #include "HX711.h"
-#include "soc/rtc.h"
 #include "RadioLib.h"
-
 #include "driver/rtc_io.h"
+#include "soc/rtc.h"
+#include "soc/rtc_cntl_reg.h"
 
 #define in1              19
 #define in2              18
@@ -39,8 +36,7 @@
 #define BUTTON_PIN_BITMASK(GPIO) (1ULL << GPIO)
 #define WAKEUP_GPIO_27 GPIO_NUM_27     // Only RTC IO are allowed
 #define WAKEUP_GPIO_12 GPIO_NUM_12     // Only RTC IO are allowed
-uint64_t bitmask = BUTTON_PIN_BITMASK(WAKEUP_GPIO_27);
-// | BUTTON_PIN_BITMASK(WAKEUP_GPIO_12);
+uint64_t bitmask = BUTTON_PIN_BITMASK(WAKEUP_GPIO_27) | BUTTON_PIN_BITMASK(WAKEUP_GPIO_12);
 RTC_DATA_ATTR int bootCount = 0;
 
 String cmdFromMsg = "nothing";
@@ -54,9 +50,9 @@ float density = 1.0;             // Density of the liquid
 
 SPIClass SPI_2(VSPI);
 SPISettings spiSettings(2000000, MSBFIRST, SPI_MODE0);
-SX1276 radio = new Module(csLora, dio0Lora, -1, misoLora, SPI_2, spiSettings);
+SX1276 radio = new Module(csLora, dio0Lora, rstLora, misoLora, SPI_2, spiSettings);
 
-volatile bool receivedFla g = false;
+volatile bool receivedFlag = false;
 #if defined(ESP8266) || defined(ESP32)
   ICACHE_RAM_ATTR
 #endif
@@ -258,9 +254,14 @@ float previousWeight;
 bool doCalculateFlag = false;
 bool doFlushFlag = false;
 
+// maxVoltage = 10.2V-> adc = 1948
+// minVoltage = 9V -> 1706
+
 int readBattery(){
   //battery need the adc value
   int batt = movingAverageBatt.addValue(analogRead(adcBatt));
+  batt = map(batt, 1706, 1948, 0, 100);
+  batt = constrain(batt, 0,100);
   // Serial.print("batt: ");
   // Serial.println(batt);
   return batt;
@@ -293,6 +294,7 @@ void doCmd(void* pvParameters){
     FlushButton.update();
     LimitSwitch1.update();
     LimitSwitch2.update();
+    readBattery();
 
     if(cmdFromMsg == "nothing"){
       // do nothing
@@ -307,7 +309,10 @@ void doCmd(void* pvParameters){
 
     else if(cmdFromMsg == "measure"){
       scale.power_up();
+      scale.tare();
+      doSend("measureStartReply");
       Serial.println("masuk measure");
+      digitalWrite(ledHijau, HIGH);
       doCalculateFlag = true;
       cmdFromMsg = "nothing";
     }
@@ -316,13 +321,14 @@ void doCmd(void* pvParameters){
     else if(cmdFromMsg == "stop"){
       Serial.println("masuk stop");
       scale.power_down();
+      digitalWrite(ledHijau, LOW);
       doCalculateFlag = false;
       doSend("stopReply"); //sensor datas
       cmdFromMsg = "nothing";
     }
 
     else if (cmdFromMsg == "flush") {
-      Serial.println("masuk flush");
+      doSend("flushStartReply");
       doFlushFlag = true;
       cmdFromMsg = "nothing";
     }
@@ -344,7 +350,7 @@ void doCmd(void* pvParameters){
     }
 
     if (FlushButton.isFlagChanged()){
-      Serial.println("masuk flush");
+      doSend("flushStartReply");
       doFlushFlag = true;
       cmdFromMsg = "nothing";
     }
@@ -391,13 +397,14 @@ void doFlush(void* pvParameters){
   xLastWakeTime = xTaskGetTickCount ();
   for(;;){
     if(doFlushFlag){
+      digitalWrite(motorTrig, HIGH);
       switch (state) {
           case 0:
               // Forward to toss
               if (!LimitSwitch1.isFlagChanged()) {
                   doMotor(1, 255);
 
-                  Serial.println("motor is turning");
+                  Serial.println("motor is turning0");
               } else {
                   doMotor(0, 0); // Stop motor
                   state = 1;     // Move to next state
@@ -405,7 +412,7 @@ void doFlush(void* pvParameters){
               break;
 
           case 1:
-              Serial.println("motor stop and delaying");
+              Serial.println("motor stop and delaying1");
               if (nonBlockingDelay(3000)) {
                   state = 2; // Move to reverse
               }
@@ -415,17 +422,18 @@ void doFlush(void* pvParameters){
           case 2:
               // Reverse
               if (!LimitSwitch2.isFlagChanged()) {
-                  Serial.println("motor is reversing");
+                  Serial.println("motor is reversing2");
                   doMotor(-1, 255);
 
               } else {
                   doMotor(0, 0); // Stop motor
                   state = 3;     // Move to next state
+                  Serial.println("masuk sini");
               }
               break;
 
           case 3:
-              Serial.println("motor stop and delaying and relay on");
+              Serial.println("motor stop and delaying and relay on3");
               digitalWrite(relayValve, HIGH);
               if (nonBlockingDelay(3000)) {
                 digitalWrite(relayValve, LOW);
@@ -438,7 +446,7 @@ void doFlush(void* pvParameters){
           case 4:
               if (!LimitSwitch1.isFlagChanged()) {
                   doMotor(1, 255);
-                  Serial.println("motor is turning again");
+                  Serial.println("motor is turning again4");
               } else {
                   doMotor(0, 0); // Stop motor
                   state = 5;     // Move to next state
@@ -447,7 +455,7 @@ void doFlush(void* pvParameters){
 
           case 5:
               // Non-blocking delay after reverse motion
-              Serial.println("motor stop and delaying");
+              Serial.println("motor stop and delaying5");
               if (nonBlockingDelay(3000)) {
                   state = 6; // Activate relay
               }
@@ -458,12 +466,13 @@ void doFlush(void* pvParameters){
               // Reverse to complete cycle
               if (!LimitSwitch2.isFlagChanged()) {
                   doMotor(-1, 255);
-                  Serial.println("motor is reversing again FINAL!");
+                  Serial.println("motor is reversing again FINAL!6");
               } else {
                   doMotor(0, 0); // Stop motor
                   Serial.println("done");
                   state = 0;     // Reset state to start over
                   doFlushFlag = false;
+                  digitalWrite(motorTrig, LOW);
                   doSend("flushReply");
               }
               break;
@@ -483,6 +492,10 @@ void setup() {
   rtc_gpio_pullup_dis(WAKEUP_GPIO_27);
   rtc_gpio_pulldown_en(WAKEUP_GPIO_12);
   rtc_gpio_pullup_dis(WAKEUP_GPIO_12);
+
+  digitalWrite(GPIO_NUM_26, LOW);
+  gpio_deep_sleep_hold_en();
+  gpio_hold_en(GPIO_NUM_26);
  
   xTaskCreatePinnedToCore(
     doCmd,   /* Task function. */
@@ -542,7 +555,7 @@ void setup() {
   rtc_clk_cpu_freq_to_config(RTC_CPU_FREQ_80M, &config);
   rtc_clk_cpu_freq_set_config_fast(&config);
   scale.begin(dtHx711, sckHx711);
-  scale.set_scale(965.472);
+  scale.set_scale(972.202);
   scale.tare();
 
   SPI_2.begin(sclkLora, misoLora, mosiLora, csLora);
@@ -590,6 +603,9 @@ bool nonBlockingDelay(unsigned long duration) {
 int delayInterval = 3000;
 
 
+//send and wait for reply
+//send continously while wait for reply
+//send continously when failed
 
 void doSend(String which){
   String msg; //flowrate,volume,battery,reply in one packet
@@ -602,8 +618,15 @@ void doSend(String which){
     msg = String(flowRate) + "," + String(totalVolume) + "," + String(readBattery()) + ","+ String(0);
   }
 
+  else if (which == "flushStartReply") {
+    msg = String(0)+"," + String(0) + "," + String(0) + ","+ "flushing!";
+  }
+
   else if (which == "flushReply") {
     msg = String(0)+"," + String(0) + "," + String(0) + ","+ "flushed!";
+  }
+  else if (which == "measureStartReply") {
+    msg = String(0)+"," + String(0) + "," + String(0) + ","+ "measuring!";
   }
   else if (which == "stopReply") {
     msg = String(0)+"," + String(0) + "," + String(0) + ","+ "stopped!";
@@ -612,40 +635,42 @@ void doSend(String which){
     msg = String(0)+"," + String(0) + "," + String(0) + ","+ "slept!";
   }
   
-
-
-  int state = radio.transmit(msg);
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println(msg + " <<sent");
-  } else if (state == RADIOLIB_ERR_PACKET_TOO_LONG) {
-    Serial.println(F("[SX1278] Packet too long!"));
-  } else if (state == RADIOLIB_ERR_TX_TIMEOUT) {
-    Serial.println(F("[SX1278] Timed out while transmitting!"));
-  } else {
-    Serial.println(F("[SX1278] Failed to transmit packet, code "));
-    Serial.println(state);
+  int state;
+  while(state != RADIOLIB_ERR_NONE){
+    state = radio.transmit(msg);
+    if (state == RADIOLIB_ERR_NONE) {
+      Serial.println(msg + " <<sent");
+    } else if (state == RADIOLIB_ERR_PACKET_TOO_LONG) {
+      Serial.println(F("[SX1278] Packet too long!"));
+    } else if (state == RADIOLIB_ERR_TX_TIMEOUT) {
+      Serial.println(F("[SX1278] Timed out while transmitting!"));
+    } else {
+      Serial.println(F("[SX1278] Failed to transmit packet, code "));
+      Serial.println(state);
+    }
+    if(nonBlockingDelay(3000)){
+      Serial.println("error transmitting after 3s of retry");
+      break;
+    }
   }
-
-
 }
+
+
 
 void doMotor(int dir, int pwm){
   
+  
   if(dir == 1) {
-
-    digitalWrite(motorTrig, HIGH);
     digitalWrite(in1, HIGH);
     digitalWrite(in2, LOW);
   }
   else if (dir == -1){
-    digitalWrite(motorTrig, HIGH);
     digitalWrite(in1, LOW);
     digitalWrite(in2, HIGH);
   }
   else {
     digitalWrite(in1, LOW);
     digitalWrite(in2, LOW);
-    digitalWrite(motorTrig, LOW);
   }
   analogWrite(pwmA, pwm);
 }
