@@ -51,7 +51,7 @@ float density = 1.0;             // Density of the liquid
 
 SPIClass SPI_2(VSPI);
 SPISettings spiSettings(2000000, MSBFIRST, SPI_MODE0);
-SX1276 radio = new Module(csLora, dio0Lora, rstLora, misoLora, SPI_2, spiSettings);
+SX1276 radio = new Module(csLora, dio0Lora, -1, misoLora, SPI_2, spiSettings);
 
 
 uint8_t defaultSyncWord[] = {0x12, 0xAD};
@@ -75,6 +75,22 @@ void setSyncFlag(void) {
   // we got a packet, set the flag
   syncFlag = true;
   // Serial.println("interrupt");
+}
+unsigned long startMillisMotorStop1 = 0, startMillisRelay = 0, startMillisMotorStop2 = 0;
+bool inDelayMotorStop1 = false, inDelayRelay = false, inDelayMotorStop2 = false;
+
+bool nonBlockingDelay(unsigned long duration, unsigned long &startMillis, bool &inDelay) {
+    if (!inDelay) {
+        startMillis = millis(); // Capture the start time
+        inDelay = true;         // Start the delay
+    }
+
+    if (millis() - startMillis >= duration) {
+        inDelay = false; // Delay finished
+        return true;     // Indicate the delay has ended
+    }
+
+    return false; // Delay ongoing
 }
 
 void print_GPIO_wake_up(){
@@ -450,7 +466,7 @@ void doFlush(void* pvParameters){
 
           case 1:
               Serial.println("motor stop and delaying1");
-              if (nonBlockingDelay(3000)) {
+              if (nonBlockingDelay(3000, startMillisMotorStop1, inDelayMotorStop1)) {
                   state = 2; // Move to reverse
               }
 
@@ -472,7 +488,7 @@ void doFlush(void* pvParameters){
           case 3:
               Serial.println("motor stop and delaying and relay on3");
               digitalWrite(relayValve, HIGH);
-              if (nonBlockingDelay(3000)) {
+              if (nonBlockingDelay(3000, startMillisRelay, inDelayRelay)) {
                 digitalWrite(relayValve, LOW);
                   Serial.println("relay off");
                   state = 4;
@@ -493,7 +509,7 @@ void doFlush(void* pvParameters){
           case 5:
               // Non-blocking delay after reverse motion
               Serial.println("motor stop and delaying5");
-              if (nonBlockingDelay(3000)) {
+              if (nonBlockingDelay(3000, startMillisMotorStop2, inDelayMotorStop2)) {
                   state = 6; // Activate relay
               }
 
@@ -530,12 +546,6 @@ void setup() {
   rtc_gpio_pullup_dis(WAKEUP_GPIO_27);
   rtc_gpio_pulldown_en(WAKEUP_GPIO_12);
   rtc_gpio_pullup_dis(WAKEUP_GPIO_12);
-
-  digitalWrite(GPIO_NUM_26, LOW);
-  gpio_deep_sleep_hold_en();
-  gpio_hold_en(GPIO_NUM_26);
- 
-
   
 
   FlushButton.begin();
@@ -553,13 +563,10 @@ void setup() {
   // pinMode(ledIndicator, OUTPUT);
   pinMode(adcBatt, INPUT);
 
-  rtc_cpu_freq_config_t config;
-  rtc_clk_cpu_freq_get_config(&config);
-  rtc_clk_cpu_freq_to_config(RTC_CPU_FREQ_80M, &config);
-  rtc_clk_cpu_freq_set_config_fast(&config);
-  scale.begin(dtHx711, sckHx711);
-  scale.set_scale(972.202);
-  scale.tare();
+  // digitalWrite(GPIO_NUM_26, LOW);
+  // gpio_deep_sleep_hold_en();
+  // gpio_hold_en(GPIO_NUM_26);
+
 
   SPI_2.begin(sclkLora, misoLora, mosiLora, csLora);
   
@@ -574,6 +581,13 @@ void setup() {
   pinMode(dio4Lora, INPUT_PULLDOWN);
   attachInterrupt(digitalPinToInterrupt(dio4Lora), setSyncFlag, RISING);
 
+  rtc_cpu_freq_config_t config;
+  rtc_clk_cpu_freq_get_config(&config);
+  rtc_clk_cpu_freq_to_config(RTC_CPU_FREQ_80M, &config);
+  rtc_clk_cpu_freq_set_config_fast(&config);
+  scale.begin(dtHx711, sckHx711);
+  scale.set_scale(972.202);
+  scale.tare();
 
 
 
@@ -625,6 +639,7 @@ void setup() {
     // delay(2000);
     radio.setSequencerStart();
     Serial.println("go sleep......");
+
     esp_deep_sleep_start();
     // Serial.println(radio.getIrqFlags1(), BIN);
   }
@@ -637,23 +652,24 @@ void setup() {
 //calculate ml/s and V
 
 
-bool nonBlockingDelay(unsigned long duration) {
-    static unsigned long startMillis = 0;
-    static bool inDelay = false;
+// bool nonBlockingDelay(unsigned long duration) {
+//     static unsigned long startMillis = 0;
+//     static bool inDelay = false;
 
-    if (!inDelay) {
-        startMillis = millis(); // Capture the start time
-        inDelay = true;         // Start the delay
-    }
+//     if (!inDelay) {
+//         startMillis = millis(); // Capture the start time
+//         inDelay = true;         // Start the delay
+//     }
 
-    if (millis() - startMillis >= duration) {
-        inDelay = false; // Delay finished
-        return true;     // Indicate the delay has ended
-    }
+//     if (millis() - startMillis >= duration) {
+//         inDelay = false; // Delay finished
+//         return true;     // Indicate the delay has ended
+//     }
 
-    return false; // Delay ongoing
-}
-int delayInterval = 3000;
+//     return false; // Delay ongoing
+// }
+
+
 
 
 //send and wait for reply
