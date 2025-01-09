@@ -13,6 +13,8 @@ SPISettings spiSettings(2000000, MSBFIRST, SPI_MODE0);
 SX1276 radio = new Module(32, 27, 26, 33, SPI_2, spiSettings);
 
 
+uint8_t defaultSyncWord[] = {0x12, 0xAD};
+uint8_t wakeSyncWord[] = {0x11, 0xAD};
 // flag to indicate that a packet was received
 volatile bool receivedFlag = false;
 
@@ -49,7 +51,8 @@ void setup() {
     while (true) { delay(10); }
   }
 
-  state = radio.setSpreadingFactor(7);
+  // state = radio.setSpreadingFactor(7);
+  // radio.setCrcFiltering(false);
 
   radio.setPacketReceivedAction(setFlag);
 
@@ -123,15 +126,27 @@ void loop() {
   }
 
   if(toTransmit){
-
-    Serial.println("sending");
     msg = inputString;
-    int state = radio.transmit(msg);
+    int state;
+    if(msg == "wake,0"){
+      state = radio.setSyncWord(wakeSyncWord, 2);
+      // Serial.println(radio.getSyncWord(), BIN);
+      radio.setBeaconMode(true);
+      Serial.println("wake");
+      byte byteArr[] = {0x01, 0x23, 0x45, 0x67,
+                        0x89, 0xAB, 0xCD, 0xEF};
+      state = radio.transmit(byteArr, 8);
+    }
+    else {
+      state = radio.setSyncWord(defaultSyncWord, 2);
+      // Serial.println(radio.getSyncWord(), BIN);
+      radio.setBeaconMode(false);
+      Serial.println("sending");
+      state = radio.transmit(msg);
+    }
+
     
 
-    // byte byteArr[] = {0x01, 0x23, 0x45, 0x67,
-    //                   0x89, 0xAB, 0xCD, 0xEF};
-    // int state = radio.transmit(byteArr, 8);
 
     if (state == RADIOLIB_ERR_NONE) {
       Serial.println(msg + " sent");
@@ -154,7 +169,7 @@ void loop() {
   }
 
   //if haven't receive reply yet
-  if(nonBlockingDelay(500) && continueSendFlag){
+  if(nonBlockingDelay(1000) && continueSendFlag){
       int state = radio.transmit(msg);
     
 
@@ -162,12 +177,23 @@ void loop() {
     //                   0x89, 0xAB, 0xCD, 0xEF};
     // int state = radio.transmit(byteArr, 8);
 
+    if(msg == "wake,0"){
+      Serial.println("send wake again");
+      byte byteArr[] = {0x01, 0x23, 0x45, 0x67,
+                        0x89, 0xAB, 0xCD, 0xEF};
+      state = radio.transmit(byteArr, 8);
+    }
+    else {
+      state = radio.transmit(msg);
+    }
+
     if (state == RADIOLIB_ERR_NONE) {
       Serial.println(msg + " sent again");
     } else if (state == RADIOLIB_ERR_PACKET_TOO_LONG) {
       Serial.println(F("[SX1278] Packet too long!"));
     } else if (state == RADIOLIB_ERR_TX_TIMEOUT) {
       Serial.println(F("[SX1278] Timed out while transmitting!"));
+      // Serial.println(radio.getIrqFlags1(), BIN);
     } else {
       Serial.println(F("[SX1278] Failed to transmit packet, code "));
       Serial.println(state);
@@ -204,8 +230,9 @@ void loop() {
       Serial.print(" reply: ");
       Serial.println(reply);
       
-      if(reply == "woke!" || reply == "flushing!" || reply == "measuring!" || reply == "stopped!" || reply == "slept!"){
+      if(reply == "w" || reply == "flushed!" || reply == "stopped!" || reply == "flushing!"|| reply == "measuring!" || reply == "slept!"){
         continueSendFlag = false;
+        radio.setBeaconMode(false);
         // inputString = "";
         // Serial.println("masuk reply =");
       }

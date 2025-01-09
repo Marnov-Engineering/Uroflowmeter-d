@@ -38,6 +38,7 @@
 #define WAKEUP_GPIO_12 GPIO_NUM_12     // Only RTC IO are allowed
 uint64_t bitmask = BUTTON_PIN_BITMASK(WAKEUP_GPIO_27) | BUTTON_PIN_BITMASK(WAKEUP_GPIO_12);
 RTC_DATA_ATTR int bootCount = 0;
+bool wakeupOnSyncInterrupt = false;
 
 String cmdFromMsg = "nothing";
 String reply;
@@ -52,6 +53,10 @@ SPIClass SPI_2(VSPI);
 SPISettings spiSettings(2000000, MSBFIRST, SPI_MODE0);
 SX1276 radio = new Module(csLora, dio0Lora, rstLora, misoLora, SPI_2, spiSettings);
 
+
+uint8_t defaultSyncWord[] = {0x12, 0xAD};
+uint8_t wakeSyncWord[] = {0x11, 0xAD};
+
 volatile bool receivedFlag = false;
 #if defined(ESP8266) || defined(ESP32)
   ICACHE_RAM_ATTR
@@ -59,6 +64,16 @@ volatile bool receivedFlag = false;
 void setFlag(void) {
   // we got a packet, set the flag
   receivedFlag = true;
+  // Serial.println("interrupt");
+}
+
+volatile bool syncFlag = false;
+#if defined(ESP8266) || defined(ESP32)
+  ICACHE_RAM_ATTR
+#endif
+void setSyncFlag(void) {
+  // we got a packet, set the flag
+  syncFlag = true;
   // Serial.println("interrupt");
 }
 
@@ -78,6 +93,8 @@ void print_wakeup_reason() {
       break;
     case ESP_SLEEP_WAKEUP_EXT1:
       Serial.println("Wakeup caused by external signal using RTC_CNTL");
+      wakeupOnSyncInterrupt = true;
+      cmdFromMsg = "wake";
       print_GPIO_wake_up();
       break;
     case ESP_SLEEP_WAKEUP_TIMER:
@@ -278,6 +295,14 @@ void doReceive(void* pvParameters) {
       receivedFlag = false;
       receivedMsg();
     }
+    // if(syncFlag) {
+    //   syncFlag = false;
+    //   // receivedMsg();
+    //   Serial.println("sync word detected");
+    //   // cmdFromMsg = "wake";
+    // }
+    // Serial.println(radio.getIRQFlags(), BIN);
+
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
 }
@@ -303,8 +328,13 @@ void doCmd(void* pvParameters){
 
     else if (cmdFromMsg == "wake") {
       Serial.println("masuk wake");
+      radio.setSyncWord(wakeSyncWord, 2);
+      radio.setBeaconMode(true);
       doSend("wakeReply"); //battery
+      radio.setSyncWord(defaultSyncWord, 2);
+      radio.setBeaconMode(false);
       cmdFromMsg = "nothing";
+
     } 
 
     else if(cmdFromMsg == "measure"){
@@ -335,18 +365,28 @@ void doCmd(void* pvParameters){
 
     else if (cmdFromMsg == "sleep"){
       Serial.println("masuk sleep");
-      cmdFromMsg = "nothing";
-      int state = radio.startReceive();
-      if (state == RADIOLIB_ERR_NONE) {
-        Serial.println(F("success receive mode!"));
-      } else {
-        Serial.print(F("failed, code "));
-        Serial.println(state);
-        while (true) { delay(10); }
-      }
+
+      // int state = radio.startReceive();
+      // if (state == RADIOLIB_ERR_NONE) {
+      //   Serial.println(F("success receive mode!"));
+      // } else {
+      //   Serial.print(F("failed, code "));
+      //   Serial.println(state);
+      //   while (true) { delay(10); }
+      // }
       doSend("sleepReply");
       delay(1000);
+
+      radio.setSequencerStop();
+      int state = radio.setSyncWord(wakeSyncWord, 2);
+      // Serial.println(radio.getSyncWord(), BIN);
+      radio.setBeaconMode(true);
+      radio.setlistenSequence();
+      // delay(2000);
+      radio.setSequencerStart();
+      Serial.println("commanded to sleep......");
       esp_deep_sleep_start();
+
     }
 
     if (FlushButton.isFlagChanged()){
@@ -382,9 +422,6 @@ void doCalculate(void* pvParameters){
       Serial.println(totalVolume);
       
       doSend("data"); //sensor datas 
-    }
-    else {
-      scale.power_down();
     }
   vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
@@ -486,6 +523,7 @@ void setup() {
   Serial.begin(115200);
   ++bootCount;
   Serial.println("Boot number: " + String(bootCount));
+  wakeupOnSyncInterrupt = false;
   print_wakeup_reason();
   esp_sleep_enable_ext1_wakeup(bitmask, ESP_EXT1_WAKEUP_ANY_HIGH);
   rtc_gpio_pulldown_en(WAKEUP_GPIO_27);
@@ -497,41 +535,6 @@ void setup() {
   gpio_deep_sleep_hold_en();
   gpio_hold_en(GPIO_NUM_26);
  
-  xTaskCreatePinnedToCore(
-    doCmd,   /* Task function. */
-    "doCmd", /* name of task. */
-    5000,       /* Stack size of task */
-    NULL,        /* parameter of the task */
-    3,           /* priority of the task */
-    &DoCmd,      /* Task handle to keep track of created task */
-    0);          /* pin task to core 0 */
-
-  xTaskCreatePinnedToCore(
-    doFlush,   /* Task function. */
-    "doFlush", /* name of task. */
-    5000,       /* Stack size of task */
-    NULL,        /* parameter of the task */
-    2,           /* priority of the task */
-    &DoFlush,      /* Task handle to keep track of created task */
-    0);          /* pin task to core 0 */
-  
-  xTaskCreatePinnedToCore(
-    doCalculate,   /* Task function. */
-    "doCalculate", /* name of task. */
-    10000,       /* Stack size of task */
-    NULL,        /* parameter of the task */
-    2,           /* priority of the task */
-    &DoCalculate,      /* Task handle to keep track of created task */
-    0);          /* pin task to core 0 */
-
-  xTaskCreatePinnedToCore(
-    doReceive,   /* Task function. */
-    "doReceive", /* name of task. */
-    5000,       /* Stack size of task */
-    NULL,        /* parameter of the task */
-    3,           /* priority of the task */
-    &DoReceive,      /* Task handle to keep track of created task */
-    1);          /* pin task to core 1 */
 
   
 
@@ -568,14 +571,64 @@ void setup() {
     Serial.println(state);
     while (true) { delay(10); }
   }
-  state = radio.setSpreadingFactor(7);
+  pinMode(dio4Lora, INPUT_PULLDOWN);
+  attachInterrupt(digitalPinToInterrupt(dio4Lora), setSyncFlag, RISING);
+
+
+
 
   radio.setPacketReceivedAction(setFlag);
   state = radio.startReceive();
   // delay(1000);
+  xTaskCreatePinnedToCore(
+    doCmd,   /* Task function. */
+    "doCmd", /* name of task. */
+    5000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    3,           /* priority of the task */
+    &DoCmd,      /* Task handle to keep track of created task */
+    0);          /* pin task to core 0 */
 
-  // esp_deep_sleep_start();
-  // Serial.println("go sleep......");
+  xTaskCreatePinnedToCore(
+    doFlush,   /* Task function. */
+    "doFlush", /* name of task. */
+    5000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    2,           /* priority of the task */
+    &DoFlush,      /* Task handle to keep track of created task */
+    0);          /* pin task to core 0 */
+  
+  xTaskCreatePinnedToCore(
+    doCalculate,   /* Task function. */
+    "doCalculate", /* name of task. */
+    10000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    2,           /* priority of the task */
+    &DoCalculate,      /* Task handle to keep track of created task */
+    0);          /* pin task to core 0 */
+
+  xTaskCreatePinnedToCore(
+    doReceive,   /* Task function. */
+    "doReceive", /* name of task. */
+    5000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    3,           /* priority of the task */
+    &DoReceive,      /* Task handle to keep track of created task */
+    1);          /* pin task to core 1 */
+    
+  if(!wakeupOnSyncInterrupt){
+    radio.setSequencerStop();
+    state = radio.setSyncWord(wakeSyncWord, 2);
+    // Serial.println(radio.getSyncWord(), BIN);
+    radio.setBeaconMode(true);
+    radio.setlistenSequence();
+    // delay(2000);
+    radio.setSequencerStart();
+    Serial.println("go sleep......");
+    esp_deep_sleep_start();
+    // Serial.println(radio.getIrqFlags1(), BIN);
+  }
+  
 
 }
 
@@ -647,10 +700,6 @@ void doSend(String which){
     } else {
       Serial.println(F("[SX1278] Failed to transmit packet, code "));
       Serial.println(state);
-    }
-    if(nonBlockingDelay(3000)){
-      Serial.println("error transmitting after 3s of retry");
-      break;
     }
   }
 }
@@ -744,5 +793,4 @@ bool parseMessage(String message, String &cmdFromMsg, String &reply) {
 void loop(){
 
 }
-
 
