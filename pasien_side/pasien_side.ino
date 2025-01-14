@@ -308,7 +308,7 @@ int readBattery(){
 //core1
 void doReceive(void* pvParameters) {
   TickType_t xLastWakeTime;
-  const TickType_t xFrequency = 30/ portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 1/ portTICK_PERIOD_MS;
   xLastWakeTime = xTaskGetTickCount ();
 
   for (;;) {
@@ -443,9 +443,9 @@ void doCalculate(void* pvParameters){
           totalVolume += flowRate;
       }
       previousWeight = currentWeight;
-      // Serial.print(flowRate);
-      // Serial.print(", ");
-      // Serial.println(totalVolume);
+      Serial.print(flowRate);
+      Serial.print(", ");
+      Serial.println(totalVolume);
       
       doSend("data"); //sensor datas 
     }
@@ -649,6 +649,7 @@ void setup() {
   rtc_clk_cpu_freq_to_config(RTC_CPU_FREQ_80M, &config);
   rtc_clk_cpu_freq_set_config_fast(&config);
   scale.begin(dtHx711, sckHx711);
+  Serial.println(scale.is_ready());
   scale.set_scale(972.202);
   scale.tare();
 
