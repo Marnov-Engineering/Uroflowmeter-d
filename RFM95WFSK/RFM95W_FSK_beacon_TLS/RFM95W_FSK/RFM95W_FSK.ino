@@ -20,8 +20,8 @@ void setup() {
 
 
 
-  int state = radio.beginFSK(915.0, 4.8, 5.0, 125.0, 10, 16, true);
-  // radio.setCrcFiltering(false);
+  int state = radio.beginFSK(915.0, 4.8, 5.0, 125.0, 10, 1000, true);
+  radio.setCrcFiltering(false);
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println(F("success!"));
   } else {
@@ -30,9 +30,7 @@ void setup() {
     while (true) { delay(10); }
   }
 
-  state = radio.setBeaconMode(true);
-
-  // state = radio.setSpreadingFactor(7);
+  state = radio.setSpreadingFactor(7);
 
   // int state = radio.begin(915.0);
   
@@ -55,8 +53,8 @@ void loop() {
   // NOTE: FSK modem maximum packet length is 63 bytes!
 
   // transmit FSK packet
-  // Serial.println("sending");
-  // String msg = "ABCD";
+  Serial.println("sending");
+  String msg = "ABCD";
 
   // int state = radio.transmit(msg);
   
@@ -65,7 +63,7 @@ void loop() {
     int state = radio.transmit(byteArr, 8);
   
   if (state == RADIOLIB_ERR_NONE) {
-    Serial.println("sent!");
+    Serial.println("success");
   } else if (state == RADIOLIB_ERR_PACKET_TOO_LONG) {
     Serial.println(F("[SX1278] Packet too long!"));
   } else if (state == RADIOLIB_ERR_TX_TIMEOUT) {
@@ -77,7 +75,7 @@ void loop() {
 
 
   counter++;
-  delay(1000);
+  delay(500);
 
 
 

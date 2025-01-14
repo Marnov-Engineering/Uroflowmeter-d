@@ -19,7 +19,8 @@ void setup() {
   SPI_2.begin(MY_SCLK, MY_MISO, MY_MOSI, MY_CS);
   Serial.begin(9600);
 
-  int state = radio.beginFSK(915.0, 4.8, 5.0, 125.0, 10, 16, true);
+  int state = radio.beginFSK(915.0, 4.8, 5.0, 125.0, 10, 1000, true);
+  // radio.setCrcFiltering(false);
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println(F("success!"));
   } else {
@@ -27,7 +28,6 @@ void setup() {
     Serial.println(state);
     while (true) { delay(10); }
   }
-  state = radio.setSpreadingFactor(7);
 
   radio.setPacketReceivedAction(setFlag);
 
@@ -39,9 +39,6 @@ void setup() {
     Serial.println(state);
     while (true) { delay(10); }
   }
-
-  String str;
-  Serial.println(radio.readData(str));
 }
 // flag to indicate that a packet was received
 volatile bool receivedFlag = false;
@@ -92,7 +89,7 @@ void loop() {
 
  if(receivedFlag) {
     Serial.println("IRQ: ");
-    // Serial.println(radio.getIRQFlags(), BIN);
+    Serial.println(radio.getIRQFlags(), BIN);
     // Serial.println(radio.getIrqFlags1(), BIN);
     // Serial.println(radio.getIRQFlags(), BIN);
     // reset flag
@@ -113,17 +110,18 @@ void loop() {
       // packet was successfully received
       Serial.println(F("[SX1278] Received packet!"));
 
-      parseMessage(str, flowRate, totalVolume, battery, reply);
+      // parseMessage(str, flowRate, totalVolume, battery, reply);
 
       // print data of the packet
       Serial.print(F("[SX1278] Data:\t\t"));
-      Serial.print(flowRate);
-      Serial.print(" ");
-      Serial.print(totalVolume);
-      Serial.print(" ");
-      Serial.print(battery);
-      Serial.print(" ");
-      Serial.println(reply);
+      // Serial.print(flowRate);+
+      // Serial.print(" ");
+      // Serial.print(totalVolume);
+      // Serial.print(" ");
+      // Serial.print(battery);
+      // Serial.print(" ");
+      // Serial.println(reply);
+      Serial.println(str);
 
       // print RSSI (Received Signal Strength Indicator)
       Serial.print(F("[SX1278] RSSI:\t\t"));

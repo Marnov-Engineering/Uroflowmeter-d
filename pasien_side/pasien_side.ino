@@ -51,7 +51,7 @@ float density = 1.0;             // Density of the liquid
 
 SPIClass SPI_2(VSPI);
 SPISettings spiSettings(2000000, MSBFIRST, SPI_MODE0);
-SX1276 radio = new Module(csLora, dio0Lora, -1, misoLora, SPI_2, spiSettings);
+SX1276 radio = new Module(csLora, dio0Lora, rstLora, misoLora, SPI_2, spiSettings);
 
 
 uint8_t defaultSyncWord[] = {0x12, 0xAD};
@@ -80,6 +80,11 @@ unsigned long startMillisMotorStop1 = 0, startMillisRelay = 0, startMillisMotorS
 bool inDelayMotorStop1 = false, inDelayRelay = false, inDelayMotorStop2 = false;
 
 bool nonBlockingDelay(unsigned long duration, unsigned long &startMillis, bool &inDelay) {
+    if (duration == 0){
+      startMillis = 0;
+      inDelay = false;
+      return false;
+    }
     if (!inDelay) {
         startMillis = millis(); // Capture the start time
         inDelay = true;         // Start the delay
@@ -307,6 +312,10 @@ void doReceive(void* pvParameters) {
   xLastWakeTime = xTaskGetTickCount ();
 
   for (;;) {
+    FlushButton.update();
+    LimitSwitch1.update();
+    LimitSwitch2.update();
+
     if(receivedFlag) {
       receivedFlag = false;
       receivedMsg();
@@ -332,9 +341,7 @@ void doCmd(void* pvParameters){
 
   for(;;) {
     
-    FlushButton.update();
-    LimitSwitch1.update();
-    LimitSwitch2.update();
+    
     readBattery();
 
     if(cmdFromMsg == "nothing"){
@@ -346,6 +353,7 @@ void doCmd(void* pvParameters){
       Serial.println("masuk wake");
       radio.setSyncWord(wakeSyncWord, 2);
       radio.setBeaconMode(true);
+
       doSend("wakeReply"); //battery
       radio.setSyncWord(defaultSyncWord, 2);
       radio.setBeaconMode(false);
@@ -371,6 +379,8 @@ void doCmd(void* pvParameters){
       doCalculateFlag = false;
       doSend("stopReply"); //sensor datas
       cmdFromMsg = "nothing";
+      totalVolume =0;
+      
     }
 
     else if (cmdFromMsg == "flush") {
@@ -433,28 +443,32 @@ void doCalculate(void* pvParameters){
           totalVolume += flowRate;
       }
       previousWeight = currentWeight;
-      Serial.print(flowRate);
-      Serial.print(", ");
-      Serial.println(totalVolume);
+      // Serial.print(flowRate);
+      // Serial.print(", ");
+      // Serial.println(totalVolume);
       
       doSend("data"); //sensor datas 
     }
   vTaskDelayUntil(&xLastWakeTime, xFrequency);
-  }
+  } 
 }
 
 int state = 0; // State variable for non-blocking execution
 void doFlush(void* pvParameters){
   TickType_t xLastWakeTime;
-  const TickType_t xFrequency = 100/ portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 60/ portTICK_PERIOD_MS;
   xLastWakeTime = xTaskGetTickCount ();
   for(;;){
     if(doFlushFlag){
       digitalWrite(motorTrig, HIGH);
+
+      bool limitSwitch1Changed = LimitSwitch1.isFlagChanged();
+      bool limitSwitch2Changed = LimitSwitch2.isFlagChanged();
+
       switch (state) {
           case 0:
               // Forward to toss
-              if (!LimitSwitch1.isFlagChanged()) {
+              if (!limitSwitch1Changed) {
                   doMotor(1, 255);
 
                   Serial.println("motor is turning0");
@@ -467,6 +481,7 @@ void doFlush(void* pvParameters){
           case 1:
               Serial.println("motor stop and delaying1");
               if (nonBlockingDelay(3000, startMillisMotorStop1, inDelayMotorStop1)) {
+                  nonBlockingDelay(0, startMillisMotorStop1, inDelayMotorStop1);
                   state = 2; // Move to reverse
               }
 
@@ -474,7 +489,7 @@ void doFlush(void* pvParameters){
 
           case 2:
               // Reverse
-              if (!LimitSwitch2.isFlagChanged()) {
+              if (!limitSwitch2Changed) {
                   Serial.println("motor is reversing2");
                   doMotor(-1, 255);
 
@@ -489,7 +504,8 @@ void doFlush(void* pvParameters){
               Serial.println("motor stop and delaying and relay on3");
               digitalWrite(relayValve, HIGH);
               if (nonBlockingDelay(3000, startMillisRelay, inDelayRelay)) {
-                digitalWrite(relayValve, LOW);
+                  nonBlockingDelay(0, startMillisRelay, inDelayRelay);
+                  digitalWrite(relayValve, LOW);
                   Serial.println("relay off");
                   state = 4;
               }
@@ -497,7 +513,7 @@ void doFlush(void* pvParameters){
               break;
 
           case 4:
-              if (!LimitSwitch1.isFlagChanged()) {
+              if (!limitSwitch1Changed) {
                   doMotor(1, 255);
                   Serial.println("motor is turning again4");
               } else {
@@ -510,6 +526,7 @@ void doFlush(void* pvParameters){
               // Non-blocking delay after reverse motion
               Serial.println("motor stop and delaying5");
               if (nonBlockingDelay(3000, startMillisMotorStop2, inDelayMotorStop2)) {
+                  nonBlockingDelay(0, startMillisMotorStop2, inDelayMotorStop2);
                   state = 6; // Activate relay
               }
 
@@ -517,7 +534,7 @@ void doFlush(void* pvParameters){
 
           case 6:
               // Reverse to complete cycle
-              if (!LimitSwitch2.isFlagChanged()) {
+              if (!limitSwitch2Changed) {
                   doMotor(-1, 255);
                   Serial.println("motor is reversing again FINAL!6");
               } else {
@@ -537,6 +554,8 @@ void doFlush(void* pvParameters){
 
 void setup() {
   Serial.begin(115200);
+  SPI_2.begin(sclkLora, misoLora, mosiLora, csLora);
+  
   ++bootCount;
   Serial.println("Boot number: " + String(bootCount));
   wakeupOnSyncInterrupt = false;
@@ -562,13 +581,15 @@ void setup() {
   pinMode(ledHijau, OUTPUT);
   // pinMode(ledIndicator, OUTPUT);
   pinMode(adcBatt, INPUT);
-
-  // digitalWrite(GPIO_NUM_26, LOW);
-  // gpio_deep_sleep_hold_en();
-  // gpio_hold_en(GPIO_NUM_26);
+  // pinMode(rstLora, OUTPUT);
+  digitalWrite(ledHijau, HIGH);
 
 
-  SPI_2.begin(sclkLora, misoLora, mosiLora, csLora);
+
+  // digitalWrite(rstLora, HIGH);
+  // delayMicroseconds(100);
+  // digitalWrite(rstLora, LOW);
+  // delay(5);
   
   int state = radio.beginFSK(915.0, 4.8, 5.0, 125.0, 10, 16, true);
   if (state == RADIOLIB_ERR_NONE) {
@@ -581,13 +602,6 @@ void setup() {
   pinMode(dio4Lora, INPUT_PULLDOWN);
   attachInterrupt(digitalPinToInterrupt(dio4Lora), setSyncFlag, RISING);
 
-  rtc_cpu_freq_config_t config;
-  rtc_clk_cpu_freq_get_config(&config);
-  rtc_clk_cpu_freq_to_config(RTC_CPU_FREQ_80M, &config);
-  rtc_clk_cpu_freq_set_config_fast(&config);
-  scale.begin(dtHx711, sckHx711);
-  scale.set_scale(972.202);
-  scale.tare();
 
 
 
@@ -629,7 +643,17 @@ void setup() {
     3,           /* priority of the task */
     &DoReceive,      /* Task handle to keep track of created task */
     1);          /* pin task to core 1 */
-    
+  
+  rtc_cpu_freq_config_t config;
+  rtc_clk_cpu_freq_get_config(&config);
+  rtc_clk_cpu_freq_to_config(RTC_CPU_FREQ_80M, &config);
+  rtc_clk_cpu_freq_set_config_fast(&config);
+  scale.begin(dtHx711, sckHx711);
+  scale.set_scale(972.202);
+  scale.tare();
+
+  digitalWrite(ledHijau, LOW);
+
   if(!wakeupOnSyncInterrupt){
     radio.setSequencerStop();
     state = radio.setSyncWord(wakeSyncWord, 2);
@@ -639,7 +663,10 @@ void setup() {
     // delay(2000);
     radio.setSequencerStart();
     Serial.println("go sleep......");
-
+    digitalWrite(GPIO_NUM_26, HIGH);
+    gpio_deep_sleep_hold_en();
+    gpio_hold_en(GPIO_NUM_26);
+    delay(10);
     esp_deep_sleep_start();
     // Serial.println(radio.getIrqFlags1(), BIN);
   }
@@ -677,10 +704,16 @@ void setup() {
 //send continously when failed
 
 void doSend(String which){
+  delay(30);
   String msg; //flowrate,volume,battery,reply in one packet
 
   if (which == "wakeReply"){
-    msg = String(0)+ "," + String(0) + "," + String(readBattery()) + ","+ "woke!"; 
+    if (readBattery() == 100){
+      msg = "," + String(0) + "," + String(readBattery()) + ","+ "woke!";
+    }
+    else {
+      msg = String(0)+ "," + String(0) + "," + String(readBattery()) + ","+ "woke!"; 
+    }
   }
 
   else if (which == "data") {

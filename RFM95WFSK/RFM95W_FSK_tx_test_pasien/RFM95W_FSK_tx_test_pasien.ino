@@ -169,7 +169,7 @@ void loop() {
   }
 
   //if haven't receive reply yet
-  if(nonBlockingDelay(1000) && continueSendFlag){
+  if(nonBlockingDelay(3000) && continueSendFlag){
       int state = radio.transmit(msg);
     
 

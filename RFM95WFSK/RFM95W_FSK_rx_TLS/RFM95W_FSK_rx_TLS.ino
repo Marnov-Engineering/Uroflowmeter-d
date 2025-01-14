@@ -6,7 +6,10 @@
 #define MY_CS    32//32
 
 #define SYNC_WORD_INTERRUPT_PIN  12  // Pin number for interrupt syncword ready
- 
+
+uint8_t defaultSyncWord[] = {0x12, 0xAD};
+uint8_t wakeSyncWord[] = {0x11, 0xAD};
+
 SPIClass SPI_2(VSPI);
 SPISettings spiSettings(2000000, MSBFIRST, SPI_MODE0);
 SX1276 radio = new Module(32, 27, 26, 33, SPI_2, spiSettings);
@@ -31,7 +34,7 @@ void setup() {
   int state = radio.beginFSK(915.0, 4.8, 5.0, 125.0, 10, 16, true);
   // radio.setCrcFiltering(false);
 
-  pinMode(interruptFlagSyncWord, INPUT_PULLDOWN);
+  pinMode(SYNC_WORD_INTERRUPT_PIN, INPUT_PULLDOWN);
 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println(F("success!"));
@@ -42,12 +45,17 @@ void setup() {
   }
   delay(500);
 
+  state = radio.setSyncWord(wakeSyncWord, 2);
   radio.setSequencerStop();
+  radio.setBeaconMode(true);
   radio.setlistenSequence();
   // delay(2000);
   radio.setSequencerStart();
+
   attachInterrupt(digitalPinToInterrupt(SYNC_WORD_INTERRUPT_PIN), interruptHandlerSyncWord, RISING);
 
+  // Serial.println(radio.getIrqFlags1(), BIN);
+   
   
  
 }
