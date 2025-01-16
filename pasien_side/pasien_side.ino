@@ -76,23 +76,19 @@ void setSyncFlag(void) {
   syncFlag = true;
   // Serial.println("interrupt");
 }
-unsigned long startMillisMotorStop1 = 0, startMillisRelay = 0, startMillisMotorStop2 = 0;
-bool inDelayMotorStop1 = false, inDelayRelay = false, inDelayMotorStop2 = false;
+unsigned long startMillisMotorStop1 = 0, startMillisRelay = 0, startMillisMotorStop2 = 0, startMillisTransmitTimeout = 0;
+bool inDelayMotorStop1 = false, inDelayRelay = false, inDelayMotorStop2 = false, inDelayTransmitTimeout = false;
+
 
 bool nonBlockingDelay(unsigned long duration, unsigned long &startMillis, bool &inDelay) {
-    if (duration == 0){
-      startMillis = 0;
-      inDelay = false;
-      return false;
-    }
     if (!inDelay) {
-        startMillis = millis(); // Capture the start time
-        inDelay = true;         // Start the delay
+        startMillis = millis(); 
+        inDelay = true;         
     }
 
     if (millis() - startMillis >= duration) {
-        inDelay = false; // Delay finished
-        return true;     // Indicate the delay has ended
+        inDelay = false; 
+        return true;     
     }
 
     return false; // Delay ongoing
@@ -217,18 +213,20 @@ class DebounceButton {
       bool flag;                   // Custom flag
       bool flagChanged;            // Flag to track if the flag was toggled
 
+
+      bool statusBT;
+      bool lastStatusBT;
+
   public:
-      // Constructor
       DebounceButton(int buttonPin, unsigned long delay = 50) 
           : pin(buttonPin), debounceDelay(delay), lastDebounceTime(0), 
-            buttonState(HIGH), lastReading(HIGH), flag(false), flagChanged(false) {}
+            buttonState(HIGH), lastReading(HIGH), flag(false), flagChanged(false),
+            statusBT(0), lastStatusBT(0) {}
 
-      // Initialize the button pin
       void begin() {
-          pinMode(pin, INPUT_PULLUP); // Assuming a pull-up resistor setup
+          pinMode(pin, INPUT_PULLUP); 
       }
 
-      // Update the button state (to be called in loop)
       void update() {
           int reading = digitalRead(pin);
 
@@ -240,15 +238,28 @@ class DebounceButton {
               if (reading != buttonState) {
                   buttonState = reading;
 
-                  // Toggle the flag on a button press
                   if (buttonState == LOW) {
-                      flag = !flag;       // Toggle the flag
-                      flagChanged = true; // Mark that the flag was changed
+                      flag = !flag;       
+                      flagChanged = true; 
                   }
               }
           }
 
           lastReading = reading;
+      }
+      
+      void vCheckBT(){
+        statusBT = digitalRead(pin);
+        buttonState = statusBT; 
+
+        if (lastStatusBT != statusBT){
+          if (statusBT == 0){
+            flag = !flag;
+            flagChanged = true;
+          }
+          lastStatusBT = statusBT;
+          
+        }
       }
 
       // Check if the button is pressed
@@ -276,7 +287,7 @@ class DebounceButton {
       }
 };
 
-MovingAverage movingAverageBatt(10);
+MovingAverage movingAverageBatt(50);
 DebounceButton FlushButton(flushButton);
 DebounceButton LimitSwitch1(limitSwitch1);
 DebounceButton LimitSwitch2(limitSwitch2);
@@ -313,8 +324,6 @@ void doReceive(void* pvParameters) {
 
   for (;;) {
     FlushButton.update();
-    LimitSwitch1.update();
-    LimitSwitch2.update();
 
     if(receivedFlag) {
       receivedFlag = false;
@@ -373,11 +382,12 @@ void doCmd(void* pvParameters){
 
 
     else if(cmdFromMsg == "stop"){
+      doCalculateFlag = false;
+      doSend("stopReply"); //sensor datas
+
       Serial.println("masuk stop");
       scale.power_down();
       digitalWrite(ledHijau, LOW);
-      doCalculateFlag = false;
-      doSend("stopReply"); //sensor datas
       cmdFromMsg = "nothing";
       totalVolume =0;
       
@@ -456,11 +466,14 @@ void doCalculate(void* pvParameters){
 int state = 0; // State variable for non-blocking execution
 void doFlush(void* pvParameters){
   TickType_t xLastWakeTime;
-  const TickType_t xFrequency = 60/ portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 20/ portTICK_PERIOD_MS;
   xLastWakeTime = xTaskGetTickCount ();
   for(;;){
     if(doFlushFlag){
       digitalWrite(motorTrig, HIGH);
+
+      LimitSwitch1.vCheckBT();
+      LimitSwitch2.vCheckBT();
 
       bool limitSwitch1Changed = LimitSwitch1.isFlagChanged();
       bool limitSwitch2Changed = LimitSwitch2.isFlagChanged();
@@ -481,7 +494,6 @@ void doFlush(void* pvParameters){
           case 1:
               Serial.println("motor stop and delaying1");
               if (nonBlockingDelay(3000, startMillisMotorStop1, inDelayMotorStop1)) {
-                  nonBlockingDelay(0, startMillisMotorStop1, inDelayMotorStop1);
                   state = 2; // Move to reverse
               }
 
@@ -504,7 +516,6 @@ void doFlush(void* pvParameters){
               Serial.println("motor stop and delaying and relay on3");
               digitalWrite(relayValve, HIGH);
               if (nonBlockingDelay(3000, startMillisRelay, inDelayRelay)) {
-                  nonBlockingDelay(0, startMillisRelay, inDelayRelay);
                   digitalWrite(relayValve, LOW);
                   Serial.println("relay off");
                   state = 4;
@@ -526,7 +537,6 @@ void doFlush(void* pvParameters){
               // Non-blocking delay after reverse motion
               Serial.println("motor stop and delaying5");
               if (nonBlockingDelay(3000, startMillisMotorStop2, inDelayMotorStop2)) {
-                  nonBlockingDelay(0, startMillisMotorStop2, inDelayMotorStop2);
                   state = 6; // Activate relay
               }
 
@@ -649,7 +659,12 @@ void setup() {
   rtc_clk_cpu_freq_to_config(RTC_CPU_FREQ_80M, &config);
   rtc_clk_cpu_freq_set_config_fast(&config);
   scale.begin(dtHx711, sckHx711);
-  Serial.println(scale.is_ready());
+
+  while(!scale.is_ready()){
+    Serial.println("wait until scale is ready");
+    delay(500);
+  }
+  // Serial.println(scale.is_ready());
   scale.set_scale(972.202);
   scale.tare();
 
@@ -741,6 +756,8 @@ void doSend(String which){
   int state;
   while(state != RADIOLIB_ERR_NONE){
     state = radio.transmit(msg);
+    // state = RADIOLIB_ERR_PACKET_TOO_LONG;
+
     if (state == RADIOLIB_ERR_NONE) {
       Serial.println(msg + " <<sent");
     } else if (state == RADIOLIB_ERR_PACKET_TOO_LONG) {
@@ -750,6 +767,12 @@ void doSend(String which){
     } else {
       Serial.println(F("[SX1278] Failed to transmit packet, code "));
       Serial.println(state);
+    }
+    if(state != RADIOLIB_ERR_NONE){
+      if(nonBlockingDelay(3000, startMillisTransmitTimeout, inDelayTransmitTimeout)){
+        Serial.println("timeout after 3000ms of trying");
+        break;
+      }
     }
   }
 }
