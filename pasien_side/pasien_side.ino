@@ -613,47 +613,9 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(dio4Lora), setSyncFlag, RISING);
 
 
-
-
   radio.setPacketReceivedAction(setFlag);
   state = radio.startReceive();
-  // delay(1000);
-  xTaskCreatePinnedToCore(
-    doCmd,   /* Task function. */
-    "doCmd", /* name of task. */
-    5000,       /* Stack size of task */
-    NULL,        /* parameter of the task */
-    3,           /* priority of the task */
-    &DoCmd,      /* Task handle to keep track of created task */
-    0);          /* pin task to core 0 */
 
-  xTaskCreatePinnedToCore(
-    doFlush,   /* Task function. */
-    "doFlush", /* name of task. */
-    5000,       /* Stack size of task */
-    NULL,        /* parameter of the task */
-    2,           /* priority of the task */
-    &DoFlush,      /* Task handle to keep track of created task */
-    0);          /* pin task to core 0 */
-  
-  xTaskCreatePinnedToCore(
-    doCalculate,   /* Task function. */
-    "doCalculate", /* name of task. */
-    10000,       /* Stack size of task */
-    NULL,        /* parameter of the task */
-    2,           /* priority of the task */
-    &DoCalculate,      /* Task handle to keep track of created task */
-    0);          /* pin task to core 0 */
-
-  xTaskCreatePinnedToCore(
-    doReceive,   /* Task function. */
-    "doReceive", /* name of task. */
-    5000,       /* Stack size of task */
-    NULL,        /* parameter of the task */
-    3,           /* priority of the task */
-    &DoReceive,      /* Task handle to keep track of created task */
-    1);          /* pin task to core 1 */
-  
   rtc_cpu_freq_config_t config;
   rtc_clk_cpu_freq_get_config(&config);
   rtc_clk_cpu_freq_to_config(RTC_CPU_FREQ_80M, &config);
@@ -667,6 +629,43 @@ void setup() {
   // Serial.println(scale.is_ready());
   scale.set_scale(972.202);
   scale.tare();
+
+  xTaskCreatePinnedToCore(
+    doCmd,   /* Task function. */
+    "doCmd", /* name of task. */
+    5000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    2,           /* priority of the task */
+    &DoCmd,      /* Task handle to keep track of created task */
+    0);          /* pin task to core 0 */
+
+  xTaskCreatePinnedToCore(
+    doFlush,   /* Task function. */
+    "doFlush", /* name of task. */
+    5000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    3,           /* priority of the task */
+    &DoFlush,      /* Task handle to keep track of created task */
+    0);          /* pin task to core 0 */
+  
+  xTaskCreatePinnedToCore(
+    doCalculate,   /* Task function. */
+    "doCalculate", /* name of task. */
+    10000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    3,           /* priority of the task */
+    &DoCalculate,      /* Task handle to keep track of created task */
+    0);          /* pin task to core 0 */
+
+  xTaskCreatePinnedToCore(
+    doReceive,   /* Task function. */
+    "doReceive", /* name of task. */
+    5000,       /* Stack size of task */
+    NULL,        /* parameter of the task */
+    3,           /* priority of the task */
+    &DoReceive,      /* Task handle to keep track of created task */
+    1);          /* pin task to core 1 */
+  
 
   digitalWrite(ledHijau, LOW);
 
@@ -768,12 +767,12 @@ void doSend(String which){
       Serial.println(F("[SX1278] Failed to transmit packet, code "));
       Serial.println(state);
     }
-    if(state != RADIOLIB_ERR_NONE){
-      if(nonBlockingDelay(3000, startMillisTransmitTimeout, inDelayTransmitTimeout)){
-        Serial.println("timeout after 3000ms of trying");
-        break;
-      }
-    }
+    // if(state != RADIOLIB_ERR_NONE){
+    //   if(nonBlockingDelay(3000, startMillisTransmitTimeout, inDelayTransmitTimeout)){
+    //     Serial.println("timeout after 3000ms of trying");
+    //     break;
+    //   }
+    // }
   }
 }
 
