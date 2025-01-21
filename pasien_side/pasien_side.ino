@@ -319,7 +319,7 @@ int readBattery(){
 //core1
 void doReceive(void* pvParameters) {
   TickType_t xLastWakeTime;
-  const TickType_t xFrequency = 1/ portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 50/ portTICK_PERIOD_MS;
   xLastWakeTime = xTaskGetTickCount ();
 
   for (;;) {
@@ -345,7 +345,7 @@ void doReceive(void* pvParameters) {
 void doCmd(void* pvParameters){
 
   TickType_t xLastWakeTime;
-  const TickType_t xFrequency = 10/ portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 100/ portTICK_PERIOD_MS;
   xLastWakeTime = xTaskGetTickCount ();
 
   for(;;) {
@@ -452,15 +452,17 @@ void doCalculate(void* pvParameters){
           totalVolume += flowRate;
       }
       previousWeight = currentWeight;
-      Serial.print(flowRate);
-      Serial.print(", ");
-      Serial.println(totalVolume);
-      if(!doCalculateFlag){
-        goto skipSend;
+      // Serial.print(flowRate);
+      // Serial.print(", ");
+      // Serial.println(totalVolume);
+      if(doCalculateFlag){
+        doSend("data"); //sensor datas 
       }
-      doSend("data"); //sensor datas 
+      else {
+      }
+        Serial.println("selesai");
+        Serial.println(doCalculateFlag);
     }
-    skipSend;
   vTaskDelayUntil(&xLastWakeTime, xFrequency);
   } 
 }
@@ -468,7 +470,7 @@ void doCalculate(void* pvParameters){
 int state = 0; // State variable for non-blocking execution
 void doFlush(void* pvParameters){
   TickType_t xLastWakeTime;
-  const TickType_t xFrequency = 20/ portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 100/ portTICK_PERIOD_MS;
   xLastWakeTime = xTaskGetTickCount ();
   for(;;){
     if(doFlushFlag){
@@ -646,7 +648,7 @@ void setup() {
     "doFlush", /* name of task. */
     5000,       /* Stack size of task */
     NULL,        /* parameter of the task */
-    3,           /* priority of the task */
+    1,           /* priority of the task */
     &DoFlush,      /* Task handle to keep track of created task */
     0);          /* pin task to core 0 */
   
@@ -756,9 +758,7 @@ void doSend(String which){
   
   int state;
   while(state != RADIOLIB_ERR_NONE){
-    if(!doCalculateFlag){
-      goto skipSend;
-    }
+
     state = radio.transmit(msg);
     // state = RADIOLIB_ERR_PACKET_TOO_LONG;
 
@@ -847,7 +847,7 @@ void receivedMsg(){
       doFlushFlag = true; 
     }
     else if (cmdFromMsg == "stop"){
-      doCalculateFlag = true;
+      doCalculateFlag = false;
     }
 
 
