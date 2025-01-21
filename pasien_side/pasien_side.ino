@@ -376,13 +376,12 @@ void doCmd(void* pvParameters){
       doSend("measureStartReply");
       Serial.println("masuk measure");
       digitalWrite(ledHijau, HIGH);
-      doCalculateFlag = true;
+      
       cmdFromMsg = "nothing";
     }
 
 
     else if(cmdFromMsg == "stop"){
-      doCalculateFlag = false;
       doSend("stopReply"); //sensor datas
 
       Serial.println("masuk stop");
@@ -395,7 +394,7 @@ void doCmd(void* pvParameters){
 
     else if (cmdFromMsg == "flush") {
       doSend("flushStartReply");
-      doFlushFlag = true;
+      
       cmdFromMsg = "nothing";
     }
 
@@ -456,9 +455,12 @@ void doCalculate(void* pvParameters){
       Serial.print(flowRate);
       Serial.print(", ");
       Serial.println(totalVolume);
-      
+      if(!doCalculateFlag){
+        goto skipSend;
+      }
       doSend("data"); //sensor datas 
     }
+    skipSend;
   vTaskDelayUntil(&xLastWakeTime, xFrequency);
   } 
 }
@@ -749,11 +751,14 @@ void doSend(String which){
     msg = String(0)+"," + String(0) + "," + String(0) + ","+ "stopped!";
   }
   else if (which == "sleepReply") {
-    msg = String(0)+"," + String(0) + "," + String(0) + ","+ "slept!";
+    msg = String(0)+"," + String(0) + "," + String(readBattery()) + ","+ "slept!";
   }
   
   int state;
   while(state != RADIOLIB_ERR_NONE){
+    if(!doCalculateFlag){
+      goto skipSend;
+    }
     state = radio.transmit(msg);
     // state = RADIOLIB_ERR_PACKET_TOO_LONG;
 
@@ -835,6 +840,16 @@ void receivedMsg(){
       Serial.println(state);
 
     }
+    if(cmdFromMsg == "measure"){
+      doCalculateFlag = true;
+    }
+    else if (cmdFromMsg == "flush"){
+      doFlushFlag = true; 
+    }
+    else if (cmdFromMsg == "stop"){
+      doCalculateFlag = true;
+    }
+
 
     
 
