@@ -410,6 +410,8 @@ void doCmd(void* pvParameters){
       //   while (true) { delay(10); }
       // }
       doSend("sleepReply");
+      scale.power_down();
+
       delay(1000);
 
       radio.setSequencerStop();
@@ -682,6 +684,7 @@ void setup() {
     // delay(2000);
     radio.setSequencerStart();
     Serial.println("go sleep......");
+    scale.power_down();
     digitalWrite(GPIO_NUM_26, HIGH);
     gpio_deep_sleep_hold_en();
     gpio_hold_en(GPIO_NUM_26);
