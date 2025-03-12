@@ -521,7 +521,7 @@ void doFlush(void* pvParameters){
           case 3:
               Serial.println("motor stop and delaying and relay on3");
               digitalWrite(relayValve, HIGH);
-              if (nonBlockingDelay(3000, startMillisRelay, inDelayRelay)) {
+              if (nonBlockingDelay(15000, startMillisRelay, inDelayRelay)) {
                   digitalWrite(relayValve, LOW);
                   Serial.println("relay off");
                   state = 4;
@@ -542,7 +542,7 @@ void doFlush(void* pvParameters){
           case 5:
               // Non-blocking delay after reverse motion
               Serial.println("motor stop and delaying5");
-              if (nonBlockingDelay(3000, startMillisMotorStop2, inDelayMotorStop2)) {
+              if (nonBlockingDelay(15000, startMillisMotorStop2, inDelayMotorStop2)) {
                   state = 6; // Activate relay
               }
 
@@ -633,7 +633,7 @@ void setup() {
     delay(500);
   }
   // Serial.println(scale.is_ready());
-  scale.set_scale(972.202);
+  scale.set_scale(965.414);
   scale.tare();
 
   xTaskCreatePinnedToCore(
@@ -684,7 +684,7 @@ void setup() {
     // delay(2000);
     radio.setSequencerStart();
     Serial.println("go sleep......");
-    scale.power_down();
+    // scale.power_down();
     digitalWrite(GPIO_NUM_26, HIGH);
     gpio_deep_sleep_hold_en();
     gpio_hold_en(GPIO_NUM_26);
@@ -760,8 +760,14 @@ void doSend(String which){
   }
   
   int state;
+  int i;
+  unsigned long startTxTime = millis();
+  unsigned long timeoutTx = 1000;
   while(state != RADIOLIB_ERR_NONE){
-
+    while(millis() - startTxTime > timeoutTx){
+      Serial.println("timeout transmit reached!");
+      break;
+    }
     state = radio.transmit(msg);
     // state = RADIOLIB_ERR_PACKET_TOO_LONG;
 
