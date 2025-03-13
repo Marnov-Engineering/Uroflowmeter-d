@@ -521,7 +521,7 @@ void doFlush(void* pvParameters){
           case 3:
               Serial.println("motor stop and delaying and relay on3");
               digitalWrite(relayValve, HIGH);
-              if (nonBlockingDelay(15000, startMillisRelay, inDelayRelay)) {
+              if (nonBlockingDelay(5000, startMillisRelay, inDelayRelay)) {
                   digitalWrite(relayValve, LOW);
                   Serial.println("relay off");
                   state = 4;
@@ -542,7 +542,7 @@ void doFlush(void* pvParameters){
           case 5:
               // Non-blocking delay after reverse motion
               Serial.println("motor stop and delaying5");
-              if (nonBlockingDelay(15000, startMillisMotorStop2, inDelayMotorStop2)) {
+              if (nonBlockingDelay(3000, startMillisMotorStop2, inDelayMotorStop2)) {
                   state = 6; // Activate relay
               }
 

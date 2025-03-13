@@ -19,6 +19,7 @@ TFT_eSPI tft = TFT_eSPI();
 int batt = 100;
 int uro = 0;
 bool bPage_plotter = false;
+bool b_btn_stp = false;
 uint32_t LastTime;
 static int simulated_value = 0;
 const int potPin = 35;

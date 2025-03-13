@@ -18,9 +18,18 @@ volatile bool receivedFlag = false;
 TFT_eSPI tft = TFT_eSPI(); 
 int batt = 100;
 int uro = 0;
+int titik = 0;
+int urutan_data = 50;
+int array_flow[50];
+int array_volum[50];
 bool bPage_plotter = false;
+bool baca_lora = HIGH;
 uint32_t LastTime;
 static int simulated_value = 0;
+static uint16_t flow_data_count = 0; // Counter for flow rate chart
+static uint16_t vol_data_count = 0;  // Counter for volume chart
+static bool is_flow_chart_shift_mode = false; // Tracks mode for flow chart
+static bool is_vol_chart_shift_mode = false;  // Tracks mode for volume chart
 const int potPin = 35;
 
 
@@ -35,9 +44,15 @@ unsigned long lastTickMillis = 0;
 lv_obj_t *scaling_rect;
 lv_obj_t *batts;
 lv_obj_t *screen;
+static lv_obj_t * btn1;
+static lv_obj_t * btn2;
+static lv_obj_t * btn3;
+static lv_obj_t * btn_stop;
 lv_obj_t *screen_plotter;
 lv_obj_t *chart1;
 lv_obj_t *chart2;
+lv_timer_t *dataflow_timer;
+lv_timer_t *datavol_timer;
 lv_chart_series_t * ser1;
 lv_chart_series_t * ser2;
 static lv_subject_t fw_download_percent_subject;
@@ -55,6 +70,7 @@ typedef enum {
     FW_UPDATE_STATE_START_READY,
     FW_UPDATE_STATE_START_READY_D,
     FW_UPDATE_STATE_START_FINISH,
+    FW_UPDATE_STATE_STOP,
 } fw_update_state_t;
 
 #if defined(ESP8266) || defined(ESP32)
@@ -108,7 +124,9 @@ void vPembacaanLora(){
       Serial.println(F("[SX1278] Received packet!"));
 
       parseMessage(str, flowRate, totalVolume, battery, reply);
-
+      // array_flow[titik] = flowRate;
+      // array_volum[titik] = totalVolume;
+      // titik++;
       // print data of the packet
       Serial.print(F("[SX1278] Data:\t\t"));
       Serial.print(flowRate);
@@ -224,9 +242,32 @@ static void animate_pages(lv_obj_t *current_page, lv_obj_t *next_page) {
     lv_obj_set_x(next_page, 0);  // Position it in the default view (no animation)
 }
 
+void button_stop_event_cb(lv_event_t *e) {
+    // lv_obj_t *btn1 =(lv_obj_t *) lv_event_get_target(e); // Get the button that triggered the event
+    // lv_obj_t *btn2 = (lv_obj_t *) lv_event_get_user_data(e); // Get the hidden button (user data)
+
+    // lv_obj_add_flag(btn1, LV_OBJ_FLAG_HIDDEN); // Hide Button1
+    // lv_obj_clear_flag(btn2, LV_OBJ_FLAG_HIDDEN); // Show Button2
+
+    lv_obj_add_flag(btn_stop, LV_OBJ_FLAG_HIDDEN);
+    // Show Button2, Button3, and Button4
+    lv_obj_clear_flag(btn1, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(btn2, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(btn3, LV_OBJ_FLAG_HIDDEN);
+    
+    baca_lora = LOW;
+    Serial.print("BACA lora ; ");
+    Serial.println(baca_lora);
+    lv_timer_pause(dataflow_timer);
+    lv_timer_pause(datavol_timer);
+}
+
+
 
 void setup() {
     Serial.begin(115200);
+    Serial.print("BACA lora ; ");
+    Serial.println(baca_lora);
     Serial.printf("Hello Arduino! LVGL %d.%d.%d\n", lv_version_major(), lv_version_minor(), lv_version_patch());
     pinMode(potPin, INPUT);
     uint16_t calData[5] = {332, 3607, 385, 3365, 1};
@@ -260,7 +301,11 @@ void loop() {
         LastTime = millis();
         update_rectangle_width(battery);
     }
-  vPembacaanLora();
+
+    if(baca_lora == 1){
+      vPembacaanLora();
+    }
+  
 }
 
 void ui_home() {
@@ -340,7 +385,7 @@ void ui_plotter() {
   chart2 = lv_chart_create(screen_plotter);
   lv_obj_set_size(chart2, 200, 150);
   lv_obj_align(chart2, LV_ALIGN_RIGHT_MID, 0, 0);
-  lv_chart_set_update_mode(chart2, LV_CHART_UPDATE_MODE_SHIFT );
+  lv_chart_set_update_mode(chart2, LV_CHART_UPDATE_MODE_CIRCULAR );
   lv_obj_set_style_size(chart2, 0, 0, LV_PART_INDICATOR);
   lv_chart_set_point_count(chart2, 50);
 
@@ -352,28 +397,36 @@ void ui_plotter() {
   lv_obj_set_style_text_font(chart2_label, &lv_font_montserrat_14, LV_PART_MAIN);
   lv_obj_align_to(chart2_label, chart2, LV_ALIGN_OUT_TOP_MID, 0, 0);
 
-  lv_timer_create(add_dataFlow, 1000, chart1);
-  lv_timer_create(add_dataVol, 1000, chart2);
+  dataflow_timer = lv_timer_create(add_dataFlow, 1000, chart1);
+  datavol_timer = lv_timer_create(add_dataVol, 1000, chart2);
 
   static lv_style_t style_btn;
   lv_style_init(&style_btn);
   lv_style_set_radius(&style_btn, 3);
   lv_style_set_bg_color(&style_btn, lv_palette_main(LV_PALETTE_GREEN));
 
-  lv_obj_t * btn1 = lv_button_create(screen_plotter);
+  static lv_style_t style_btn_stop;
+  lv_style_init(&style_btn_stop);
+  lv_style_set_radius(&style_btn_stop, 3);
+  lv_style_set_bg_color(&style_btn_stop, lv_palette_main(LV_PALETTE_RED));
+
+  btn1 = lv_button_create(screen_plotter);
   lv_obj_set_size(btn1, 100, 50);
   lv_obj_add_style(btn1, &style_btn, 0);
   lv_obj_align(btn1, LV_ALIGN_BOTTOM_MID, -150, 0);
+  lv_obj_add_flag(btn1, LV_OBJ_FLAG_HIDDEN);
 
   lv_obj_t * label_btn1 = lv_label_create(btn1);
   lv_label_set_text(label_btn1, "Print");
   lv_obj_center(label_btn1);
+  lv_obj_add_event_cb(btn1, event_btn_print, LV_EVENT_CLICKED, NULL);
 
-  lv_obj_t * btn2 = lv_button_create(screen_plotter);
+  btn2 = lv_button_create(screen_plotter);
   lv_obj_set_size(btn2, 100, 50);
   lv_obj_add_style(btn2, &style_btn, 0);
   lv_obj_align(btn2, LV_ALIGN_BOTTOM_MID, 0, 0);
   lv_obj_add_event_cb(btn2, event_cb_btn, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_flag(btn2, LV_OBJ_FLAG_HIDDEN);
 
   lv_obj_t * label_btn2 = lv_label_create(btn2);
   lv_label_set_text(label_btn2, "Finish");
@@ -382,16 +435,28 @@ void ui_plotter() {
   lv_subject_init_int(&fw_update_status_subject, FW_UPDATE_STATE_IDLE);
   lv_subject_add_observer(&fw_update_status_subject, fw_upload_manager_observer_cb, NULL);
 
-  lv_obj_t * btn3 = lv_button_create(screen_plotter);
+  btn3 = lv_button_create(screen_plotter);
   lv_obj_set_size(btn3, 100, 50);
   lv_obj_add_style(btn3, &style_btn, 0);
   lv_obj_align(btn3, LV_ALIGN_BOTTOM_MID, 150, 0);
   lv_obj_add_event_cb(btn3, event_cb_btn2, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_flag(btn3, LV_OBJ_FLAG_HIDDEN);
 
 
   lv_obj_t * label_btn3 = lv_label_create(btn3);
   lv_label_set_text(label_btn3, "Flush");
   lv_obj_center(label_btn3);
+
+  btn_stop = lv_button_create(screen_plotter);
+  lv_obj_set_size(btn_stop, 100, 50);
+  lv_obj_add_style(btn_stop, &style_btn_stop, 0);
+  lv_obj_align(btn_stop, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+  lv_obj_add_event_cb(btn_stop, button_stop_event_cb, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t * label_btn_stop = lv_label_create(btn_stop);
+  lv_label_set_text(label_btn_stop, "Stop");
+  lv_obj_center(label_btn_stop);
 }
 
 void update_chart_point_count(lv_obj_t *chart, lv_chart_series_t *series, uint16_t *point_count) {
@@ -405,24 +470,71 @@ void update_chart_point_count(lv_obj_t *chart, lv_chart_series_t *series, uint16
     lv_chart_refresh(chart);
 }
 
+static void switch_to_shift_mode(lv_obj_t *chart, bool *is_shift_mode) {
+    uint16_t point_count = lv_chart_get_point_count(chart);
+
+    // Backup existing data
+    lv_chart_series_t *ser = lv_chart_get_series_next(chart, NULL);
+    int16_t temp_data[point_count];
+    memcpy(temp_data, ser->y_points, sizeof(int16_t) * point_count);
+
+    // Switch to shift mode
+    lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_SHIFT);
+
+    // Restore the backed-up data
+    memcpy(ser->y_points, temp_data, sizeof(int16_t) * point_count);
+
+    lv_chart_refresh(chart);
+
+    // Update the tracking variable
+    *is_shift_mode = true;
+}
+
+
 
 static void add_dataFlow(lv_timer_t *timer) {
     lv_obj_t *chart = (lv_obj_t *)timer->user_data;
     lv_chart_series_t *ser = lv_chart_get_series_next(chart, NULL);
     // int value = flowRate;
+    // if (bPage_plotter) {
+    //     lv_chart_set_next_value(chart, ser, flowRate);
+    // }
     if (bPage_plotter) {
-        lv_chart_set_next_value(chart, ser, flowRate);
+        if (flow_data_count < lv_chart_get_point_count(chart)) {
+            // Circular mode
+            lv_chart_set_next_value(chart, ser, flowRate);
+            flow_data_count++;
+        } else {
+            // Switch to shift mode and continue adding
+            if (!is_flow_chart_shift_mode) {
+                switch_to_shift_mode(chart, &is_flow_chart_shift_mode);
+            }
+            lv_chart_set_next_value(chart, ser, flowRate);
+        }
     }
-
 }
 
 static void add_dataVol(lv_timer_t *timer) {
     lv_obj_t *chart = (lv_obj_t *)timer->user_data;
     lv_chart_series_t *ser = lv_chart_get_series_next(chart, NULL);
     // int value = totalVolume;
+    // if (bPage_plotter) {
+    //     lv_chart_set_next_value(chart, ser, totalVolume);
+    // }
     if (bPage_plotter) {
-        lv_chart_set_next_value(chart, ser, totalVolume);
+        if (vol_data_count < lv_chart_get_point_count(chart)) {
+            // Circular mode
+            lv_chart_set_next_value(chart, ser, totalVolume);
+            vol_data_count++;
+        } else {
+            // Switch to shift mode and continue adding
+            if (!is_vol_chart_shift_mode) {
+                switch_to_shift_mode(chart, &is_vol_chart_shift_mode);
+            }
+            lv_chart_set_next_value(chart, ser, totalVolume);
+        }
     }
+
 
 }
 
@@ -454,8 +566,15 @@ static void event_cb(lv_event_t *e) {
 
         // animate_pages(screen, screen_plotter);
         // bPage_plotter = true;
+
+        
+        
+        // lv_timer_resume(dataflow_timer);
+        // lv_timer_resume(datavol_timer);
+
     }
 }
+
 
 // static void event_cb(lv_event_t *e) {
 //   if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
@@ -561,8 +680,35 @@ static void fw_update_win_observer_cb(lv_observer_t * observer, lv_subject_t * s
         lv_obj_align(label, LV_ALIGN_CENTER, 0, -20);
         
         animate_pages(screen, screen_plotter);
+        Serial.println("Titik nol");
+        titik = 0;
+        lv_chart_set_update_mode(chart1, LV_CHART_UPDATE_MODE_CIRCULAR);
+        lv_chart_set_update_mode(chart2, LV_CHART_UPDATE_MODE_CIRCULAR);
+        
+        reset_chart_series(chart1); // Remove all existing series
+        ser1 = lv_chart_add_series(chart1, lv_palette_main(LV_PALETTE_BLUE), LV_CHART_AXIS_PRIMARY_Y); // Re-add series
+        
+        // Reset series in chart2
+        reset_chart_series(chart2); // Remove all existing series
+        ser2 = lv_chart_add_series(chart2, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y); // Re-add series
+
+        // Optionally log reset
+        Serial.println("Charts reset.");
+        
+        lv_timer_resume(dataflow_timer);
+        lv_timer_resume(datavol_timer);
         bPage_plotter = true;
         lv_obj_delete(win);
+    }
+
+    else if(status == FW_UPDATE_STATE_STOP) {
+        // lv_obj_clean(cont);
+        // lv_obj_t * label = lv_label_create(cont);
+        // lv_label_set_text(label, "Device Ready");
+        // lv_obj_align(label, LV_ALIGN_CENTER, 0, -20);
+        
+        // animate_pages(screen, screen_plotter);
+        Serial.println("stop clicked");
     }
 
     else if(status == FW_UPDATE_STATE_CANCEL) {
@@ -635,21 +781,51 @@ static void fw_upload_manager_observer_cb(lv_observer_t * observer, lv_subject_t
 
 static void event_cb_btn(lv_event_t *e) {
   if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-    // Reset series in chart1
-    reset_chart_series(chart1); // Remove all existing series
-    ser1 = lv_chart_add_series(chart1, lv_palette_main(LV_PALETTE_BLUE), LV_CHART_AXIS_PRIMARY_Y); // Re-add series
+    // // Reset series in chart1
+    // reset_chart_series(chart1); // Remove all existing series
+    // ser1 = lv_chart_add_series(chart1, lv_palette_main(LV_PALETTE_BLUE), LV_CHART_AXIS_PRIMARY_Y); // Re-add series
     
-    // Reset series in chart2
-    reset_chart_series(chart2); // Remove all existing series
-    ser2 = lv_chart_add_series(chart2, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y); // Re-add series
+    // // Reset series in chart2
+    // reset_chart_series(chart2); // Remove all existing series
+    // ser2 = lv_chart_add_series(chart2, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y); // Re-add series
 
-    // Optionally log reset
-    Serial.println("Charts reset.");
+    // // Optionally log reset
+    // Serial.println("Charts reset.");
+    lv_obj_clear_flag(btn_stop, LV_OBJ_FLAG_HIDDEN);
+
+    // Show Button2, Button3, and Button4
+    lv_obj_add_flag(btn1, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(btn2, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(btn3, LV_OBJ_FLAG_HIDDEN);
 
     // Handle any other logic like page animations or status changes
     animate_pages(screen_plotter, screen); // Example animation back to home screen
-    bPage_plotter = false;
+    baca_lora = HIGH;
+
   }
+}
+
+static void event_btn_print(lv_event_t *e) {
+  if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+    Serial.print("Flow :");
+  //     for (int i = 0; i < titik; i++) {
+  //   // if (i % 40 == 0 && i > 0) {
+  //   //   Serial.println();
+  //   // }
+  //   Serial.print(array_flow[i]);
+  //   Serial.print(" ");
+  //     }
+  //   Serial.println(" ");
+  //   Serial.print("Volume :");
+  //   for (int i = 0; i < titik; i++) {
+  //   // if (i % 40 == 0 && i > 0) {
+  //   //   Serial.println();
+  //   // }
+  //   Serial.print(array_volum[i]);
+  //   Serial.print(" ");
+  // }
+  }   
+
 }
 
 // Function to reset the chart series
@@ -658,5 +834,5 @@ static void reset_chart_series(lv_obj_t *chart) {
     while (ser) {
         lv_chart_remove_series(chart, ser); // Remove the current series
         ser = lv_chart_get_series_next(chart, NULL); // Get the next series
-    }
+}
 }
